@@ -197,7 +197,6 @@ def main():
     state["released"] = state["released"][-2000:]
 
     state["active"] = current
-    state["last_run"] = now_jst()
 
     save_state(state)
 

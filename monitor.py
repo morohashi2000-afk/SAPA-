@@ -172,7 +172,6 @@ def main():
             "first_seen": state["active"]
             .get(event_id, {})
             .get("first_seen", now_jst()),
-            "last_seen": now_jst(),
         }
 
     # 前回存在していて、今回消えたもの

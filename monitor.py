@@ -219,7 +219,10 @@ def fetch_page(url):
     )
 
     with urllib.request.urlopen(req, timeout=30) as response:
-        return response.read().decode("utf-8", errors="ignore")
+        return response.read().decode(
+            "utf-8",
+            errors="ignore",
+        )
 
 
 def parse_closures(html):
@@ -272,26 +275,102 @@ def load_json(filename, default):
         return default
 
     try:
-        with open(filename, "r", encoding="utf-8") as f:
+        with open(
+            filename,
+            "r",
+            encoding="utf-8",
+        ) as f:
             return json.load(f)
+
     except Exception:
         return default
 
 
 def load_state():
-    return load_json(STATE_FILE, {})
+    """
+    state.jsonを読み込む。
+
+    新形式：
+        {
+            "通行止めID": {...},
+            ...
+        }
+
+    旧形式：
+        [
+            {...},
+            {...}
+        ]
+
+    旧形式だった場合は自動的に新形式へ変換する。
+    """
+
+    raw = load_json(
+        STATE_FILE,
+        {},
+    )
+
+    # -----------------------------------------
+    # 正常な新形式
+    # -----------------------------------------
+
+    if isinstance(raw, dict):
+        return raw
+
+    # -----------------------------------------
+    # 以前のリスト形式
+    # -----------------------------------------
+
+    if isinstance(raw, list):
+        state = {}
+
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+
+            closure_id = make_id(item)
+
+            if closure_id:
+                state[closure_id] = item
+
+        print(
+            f"旧形式のstate.jsonを検出しました。"
+            f"{len(state)}件を新形式へ変換します。"
+        )
+
+        return state
+
+    # -----------------------------------------
+    # 想定外の形式
+    # -----------------------------------------
+
+    print(
+        "state.jsonの形式が不正なので、空の状態として開始します。"
+    )
+
+    return {}
 
 
 def load_facilities():
-    return load_json(FACILITIES_FILE, [])
+    return load_json(
+        FACILITIES_FILE,
+        [],
+    )
 
 
 def load_positions():
-    return load_json(POSITIONS_FILE, [])
+    return load_json(
+        POSITIONS_FILE,
+        [],
+    )
 
 
 def save_state(state):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
+    with open(
+        STATE_FILE,
+        "w",
+        encoding="utf-8",
+    ) as f:
         json.dump(
             state,
             f,
@@ -320,8 +399,15 @@ def normalize_name(name):
     name = name.replace("ＰＡ", "PA")
     name = name.replace("ＳＡ", "SA")
 
-    name = name.replace("スマートIC", "スマート")
-    name = name.replace("スマートＩＣ", "スマート")
+    name = name.replace(
+        "スマートIC",
+        "スマート",
+    )
+
+    name = name.replace(
+        "スマートＩＣ",
+        "スマート",
+    )
 
     return name
 
@@ -354,7 +440,10 @@ def canonical_ic_name(name):
         "八戸西スマートIC": "八戸西スマート",
     }
 
-    return aliases.get(name, name)
+    return aliases.get(
+        name,
+        name,
+    )
 
 
 # =========================================================
@@ -369,7 +458,10 @@ def split_section(section):
     if not section:
         return []
 
-    parts = re.split(r"[～〜~ー－\-→]", section)
+    parts = re.split(
+        r"[～〜~ー－\-→]",
+        section,
+    )
 
     return [
         canonical_ic_name(x)
@@ -381,7 +473,10 @@ def split_section(section):
 def route_index(route_code, ic_name):
     ic_name = canonical_ic_name(ic_name)
 
-    order = ROUTE_ORDERS.get(route_code, [])
+    order = ROUTE_ORDERS.get(
+        route_code,
+        [],
+    )
 
     normalized_order = [
         canonical_ic_name(x)
@@ -389,7 +484,10 @@ def route_index(route_code, ic_name):
     ]
 
     try:
-        return normalized_order.index(ic_name)
+        return normalized_order.index(
+            ic_name
+        )
+
     except ValueError:
         return None
 
@@ -398,12 +496,15 @@ def route_index(route_code, ic_name):
 # SAPA位置
 # =========================================================
 
-def facility_position(facility, positions):
+def facility_position(
+    facility,
+    positions,
+):
     name = facility.get("name")
 
     # 北上金ヶ崎PAは公式施設情報上、
     # 上り線で「北上JCT～水沢」の間。
-    # 現在のJSONに古い値が残っていても、
+    # JSONに古い値が残っていても、
     # ここでは正しい位置を優先する。
     if name == "北上金ヶ崎PA":
         return {
@@ -432,18 +533,33 @@ def find_facilities_in_closure(
     if len(endpoints) < 2:
         return []
 
-    start = route_index(route_code, endpoints[0])
-    end = route_index(route_code, endpoints[1])
+    start = route_index(
+        route_code,
+        endpoints[0],
+    )
+
+    end = route_index(
+        route_code,
+        endpoints[1],
+    )
 
     if start is None or end is None:
         return []
 
-    low = min(start, end)
-    high = max(start, end)
+    low = min(
+        start,
+        end,
+    )
+
+    high = max(
+        start,
+        end,
+    )
 
     matched = []
 
     for facility in facilities:
+
         if not facility.get("staffed"):
             continue
 
@@ -471,12 +587,24 @@ def find_facilities_in_closure(
         if before is None or after is None:
             continue
 
-        facility_low = min(before, after)
-        facility_high = max(before, after)
+        facility_low = min(
+            before,
+            after,
+        )
+
+        facility_high = max(
+            before,
+            after,
+        )
 
         # SAPAが通行止め区間内にあるか判定
-        if facility_high >= low and facility_low <= high:
-            matched.append(facility["name"])
+        if (
+            facility_high >= low
+            and facility_low <= high
+        ):
+            matched.append(
+                facility["name"]
+            )
 
     return matched
 
@@ -503,7 +631,10 @@ def parse_datetime(value):
             return datetime.strptime(
                 value,
                 fmt,
-            ).replace(tzinfo=JST)
+            ).replace(
+                tzinfo=JST
+            )
+
         except ValueError:
             pass
 
@@ -515,7 +646,9 @@ def now_jst():
 
 
 def duration_hours(start_time):
-    start = parse_datetime(start_time)
+    start = parse_datetime(
+        start_time
+    )
 
     if start is None:
         return None
@@ -533,10 +666,22 @@ def duration_hours(start_time):
 
 def make_id(item):
     raw = "|".join([
-        item.get("route_code", ""),
-        item.get("direction", ""),
-        item.get("section", ""),
-        item.get("start_time", ""),
+        item.get(
+            "route_code",
+            "",
+        ),
+        item.get(
+            "direction",
+            "",
+        ),
+        item.get(
+            "section",
+            "",
+        ),
+        item.get(
+            "start_time",
+            "",
+        ),
     ])
 
     return raw
@@ -578,8 +723,11 @@ def run_test_mode():
 
     # 7時間前の時刻を作る
     test_start = (
-        now_jst() - timedelta(hours=7)
-    ).strftime("%Y/%m/%d %H:%M")
+        now_jst()
+        - timedelta(hours=7)
+    ).strftime(
+        "%Y/%m/%d %H:%M"
+    )
 
     test_cases = [
         {
@@ -594,6 +742,7 @@ def run_test_mode():
                 "前沢SA",
             ],
         },
+
         {
             "name": "秋田道・湯田～協和",
             "route_code": "E46",
@@ -604,6 +753,7 @@ def run_test_mode():
                 "西仙北SA",
             ],
         },
+
         {
             "name": "磐越道・小野～磐梯河東",
             "route_code": "E49",
@@ -614,6 +764,7 @@ def run_test_mode():
                 "磐梯山SA",
             ],
         },
+
         {
             "name": "常磐道・いわき勿来～広野",
             "route_code": "E6",
@@ -623,6 +774,7 @@ def run_test_mode():
                 "四倉PA",
             ],
         },
+
         {
             "name": "山形道・笹谷～宮城川崎",
             "route_code": "E48",
@@ -632,6 +784,7 @@ def run_test_mode():
                 "古関PA",
             ],
         },
+
         {
             "name": "東北道・築館～一関",
             "route_code": "E4",
@@ -641,6 +794,7 @@ def run_test_mode():
                 "金成PA",
             ],
         },
+
         {
             "name": "東北道・白石～国見",
             "route_code": "E4",
@@ -650,6 +804,7 @@ def run_test_mode():
                 "国見SA",
             ],
         },
+
         {
             "name": "山形道・鶴岡～庄内あさひ",
             "route_code": "E48",
@@ -665,11 +820,17 @@ def run_test_mode():
 
     print()
 
-    for i, case in enumerate(test_cases, start=1):
+    for i, case in enumerate(
+        test_cases,
+        start=1,
+    ):
+
         print("-" * 60)
+
         print(
             f"TEST {i}: {case['name']}"
         )
+
         print(
             f"区間: {case['section']}"
         )
@@ -681,7 +842,10 @@ def run_test_mode():
             positions,
         )
 
-        matched_sorted = sorted(matched)
+        matched_sorted = sorted(
+            matched
+        )
+
         expected_sorted = sorted(
             case["expected"]
         )
@@ -689,12 +853,15 @@ def run_test_mode():
         print(
             f"検出: {matched_sorted}"
         )
+
         print(
             f"期待: {expected_sorted}"
         )
 
         if matched_sorted != expected_sorted:
+
             print("❌ FAIL")
+
             raise RuntimeError(
                 f"TEST {i} failed: "
                 f"expected={expected_sorted}, "
@@ -703,6 +870,7 @@ def run_test_mode():
 
         # 7時間経過している想定なので
         # 6時間以上判定も確認
+
         hours = duration_hours(
             test_start
         )
@@ -714,6 +882,7 @@ def run_test_mode():
         )
 
         if not report_candidate:
+
             print(
                 "❌ FAIL: "
                 "6時間以上の報告対象判定に失敗"
@@ -726,25 +895,34 @@ def run_test_mode():
         print(
             f"経過時間: {hours:.2f}時間"
         )
+
         print(
             "報告対象判定: True"
         )
+
         print("✅ PASS")
 
         passed += 1
 
     print()
+
     print("=" * 60)
+
     print(
-        f"TEST COMPLETE: {passed}/{len(test_cases)} PASS"
+        f"TEST COMPLETE: "
+        f"{passed}/{len(test_cases)} PASS"
     )
+
     print("=" * 60)
+
     print(
         "SAPA判定・6時間判定ともに正常です。"
     )
+
     print(
         "state.json は変更していません。"
     )
+
     print()
 
 
@@ -753,11 +931,14 @@ def run_test_mode():
 # =========================================================
 
 def main():
-    # TEST_MODE=true のときはテストだけ実行
+
+    # TEST_MODE=true のときは
+    # テストだけ実行
     if os.environ.get(
         "TEST_MODE",
-        ""
+        "",
     ).lower() == "true":
+
         run_test_mode()
         return
 
@@ -772,12 +953,20 @@ def main():
     print(
         f"現在の状態件数: {len(state)}"
     )
+
     print(
         f"対象SAPA数: {len(facilities)}"
     )
 
+    # -----------------------------------------
+    # NEXCOデータ取得
+    # -----------------------------------------
+
     html = fetch_page(URL)
-    closures = parse_closures(html)
+
+    closures = parse_closures(
+        html
+    )
 
     print(
         f"現在の通行止め件数: {len(closures)}"
@@ -785,8 +974,15 @@ def main():
 
     current_ids = set()
 
+    # -----------------------------------------
+    # 現在の通行止めを処理
+    # -----------------------------------------
+
     for closure in closures:
-        route_code = closure["route_code"]
+
+        route_code = closure[
+            "route_code"
+        ]
 
         matched = find_facilities_in_closure(
             route_code,
@@ -809,7 +1005,9 @@ def main():
             closure
         )
 
-        current_ids.add(closure_id)
+        current_ids.add(
+            closure_id
+        )
 
         state[closure_id] = {
             **closure,
@@ -820,6 +1018,7 @@ def main():
         }
 
         print()
+
         print(
             f"通行止め: "
             f"{closure['route_name']} "
@@ -857,11 +1056,24 @@ def main():
 
     disappeared = []
 
-    for closure_id, old in list(state.items()):
+    for closure_id, old in list(
+        state.items()
+    ):
+
+        # 念のため、state内のデータが
+        # 辞書でない場合は無視する
+        if not isinstance(
+            old,
+            dict,
+        ):
+            continue
+
         if closure_id not in current_ids:
+
             if not old.get(
                 "release_detected"
             ):
+
                 old["release_detected"] = (
                     now_jst().isoformat()
                 )
@@ -870,31 +1082,51 @@ def main():
                     old
                 )
 
+    # -----------------------------------------
+    # 解除検知結果
+    # -----------------------------------------
+
     if disappeared:
+
         print()
+
         print(
             f"解除を検知した通行止め: "
             f"{len(disappeared)}件"
         )
 
         for item in disappeared:
+
             print(
                 f"- {item.get('route_name')} "
                 f"{item.get('section')}"
             )
+
             print(
                 f"  解除検知: "
                 f"{item.get('release_detected')}"
             )
 
-    save_state(state)
+    # -----------------------------------------
+    # 状態保存
+    # -----------------------------------------
+
+    save_state(
+        state
+    )
 
     print()
+
     print(
         "状態を保存しました。"
     )
+
     print()
 
+
+# =========================================================
+# 実行
+# =========================================================
 
 if __name__ == "__main__":
     main()

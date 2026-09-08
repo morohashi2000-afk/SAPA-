@@ -7,6 +7,7 @@ from html.parser import HTMLParser
 
 URL = "https://www.drivetraffic.jp/road_closed_information.html"
 STATE_FILE = "state.json"
+FACILITIES_FILE = "facilities.json"
 
 JST = timezone(timedelta(hours=9))
 
@@ -84,7 +85,6 @@ def parse_closures(html):
         if len(row) < 6:
             continue
 
-        # ヘッダー行を除外
         if "路線名" in row[0]:
             continue
 
@@ -92,7 +92,6 @@ def parse_closures(html):
 
         item = dict(zip(headers, row))
 
-        # 路線名が空なら無視
         if not item["route"]:
             continue
 
@@ -101,21 +100,29 @@ def parse_closures(html):
     return closures
 
 
-def load_state():
-    if not os.path.exists(STATE_FILE):
-        return {
-            "active": {},
-            "released": []
-        }
+def load_json(filename, default):
+    if not os.path.exists(filename):
+        return default
 
     try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
+        with open(filename, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        return {
+        return default
+
+
+def load_state():
+    return load_json(
+        STATE_FILE,
+        {
             "active": {},
             "released": []
         }
+    )
+
+
+def load_facilities():
+    return load_json(FACILITIES_FILE, [])
 
 
 def save_state(state):
@@ -129,10 +136,6 @@ def save_state(state):
 
 
 def make_id(item):
-    """
-    通行止めを識別するためのID。
-    同じ路線・方向・区間・開始時刻なら同一イベントとみなす。
-    """
     values = [
         item.get("route", ""),
         item.get("direction", ""),
@@ -147,10 +150,46 @@ def now_jst():
     return datetime.now(JST).isoformat(timespec="seconds")
 
 
+def normalize_text(text):
+    return (
+        text
+        .replace("　", "")
+        .replace(" ", "")
+        .replace("ＪＣＴ", "JCT")
+        .replace("ＩＣ", "IC")
+    )
+
+
+def find_facility_mentions(item, facilities):
+    """
+    現段階では通行止め情報の文字列に
+    SAPA名が直接出ている場合だけ検出する。
+
+    IC間による正式な位置判定は次段階で実装する。
+    """
+    section = normalize_text(item.get("section", ""))
+
+    matches = []
+
+    for facility in facilities:
+        name = normalize_text(facility.get("name", ""))
+
+        if not name:
+            continue
+
+        if name in section:
+            matches.append(facility)
+
+    return matches
+
+
 def main():
     print("SAPA通行止め監視くん 起動")
 
     state = load_state()
+    facilities = load_facilities()
+
+    print(f"有人SAPAマスター: {len(facilities)}件")
 
     try:
         html = fetch_page()
@@ -167,14 +206,24 @@ def main():
     for item in closures:
         event_id = make_id(item)
 
+        matched_facilities = find_facility_mentions(
+            item,
+            facilities
+        )
+
         current[event_id] = {
             **item,
-            "first_seen": state["active"]
-            .get(event_id, {})
-            .get("first_seen", now_jst()),
+            "first_seen": (
+                state["active"]
+                .get(event_id, {})
+                .get("first_seen", now_jst())
+            ),
+            "matched_facilities": [
+                facility["name"]
+                for facility in matched_facilities
+            ],
         }
 
-    # 前回存在していて、今回消えたもの
     previous_ids = set(state["active"].keys())
     current_ids = set(current.keys())
 
@@ -193,14 +242,13 @@ def main():
 
         state["released"].append(event)
 
-    # 古い解除履歴を整理（90日）
     state["released"] = state["released"][-2000:]
 
     state["active"] = current
 
     save_state(state)
 
-    print("状態を保存しました")
+    print("状態保存完了")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,35 @@
+[
+  {"name":"津軽SA","road":"E4","before":"黒石","after":"大鰐弘前"},
+  {"name":"花輪SA","road":"E4","before":"十和田","after":"鹿角八幡平"},
+  {"name":"岩手山SA","road":"E4","before":"松尾八幡平","after":"西根"},
+  {"name":"滝沢PA","road":"E4","before":"滝沢","after":"盛岡"},
+  {"name":"矢巾PA","road":"E4","before":"盛岡南","after":"紫波"},
+  {"name":"紫波SA","road":"E4","before":"紫波","after":"花巻"},
+  {"name":"北上金ヶ崎PA","road":"E4","before":"北上金ヶ崎","after":"水沢"},
+  {"name":"前沢SA","road":"E4","before":"水沢","after":"平泉前沢"},
+  {"name":"金成PA","road":"E4","before":"若柳金成","after":"一関"},
+  {"name":"長者原SA","road":"E4","before":"築館","after":"古川"},
+  {"name":"鶴巣PA","road":"E4","before":"大和","after":"富谷JCT"},
+  {"name":"菅生PA","road":"E4","before":"仙台南","after":"村田"},
+  {"name":"国見SA","road":"E4","before":"白石","after":"国見"},
+  {"name":"福島松川PA","road":"E4","before":"福島西","after":"二本松"},
+  {"name":"吾妻PA","road":"E4","before":"福島飯坂","after":"福島西"},
+  {"name":"安達太良SA","road":"E4","before":"二本松","after":"本宮"},
+  {"name":"安積PA","road":"E4","before":"郡山南","after":"須賀川"},
+  {"name":"鏡石PA","road":"E4","before":"須賀川","after":"矢吹"},
+
+  {"name":"折爪SA","road":"E4A","before":"軽米","after":"九戸"},
+
+  {"name":"錦秋湖SA","road":"E46","before":"湯田","after":"北上西"},
+  {"name":"西仙北SA","road":"E46","before":"協和","after":"大曲"},
+
+  {"name":"古関PA","road":"E48","before":"笹谷","after":"宮城川崎"},
+  {"name":"寒河江SA","road":"E48","before":"西川","after":"寒河江"},
+  {"name":"櫛引PA","road":"E48","before":"鶴岡","after":"庄内あさひ"},
+
+  {"name":"磐梯山SA","road":"E49","before":"磐梯河東","after":"猪苗代磐梯高原"},
+  {"name":"阿武隈高原SA","road":"E49","before":"船引三春","after":"小野"},
+  {"name":"五百川PA","road":"E49","before":"磐梯熱海","after":"郡山JCT"},
+
+  {"name":"四倉PA","road":"E6","before":"いわき四倉","after":"いわき中央"}
+]

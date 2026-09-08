@@ -1,0 +1,23 @@
+name: ntfy通知テスト
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ntfyへテスト通知
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          curl \
+            -H "Title: SAPA通行止め監視くん" \
+            -H "Priority: high" \
+            -H "Tags: highway" \
+            -d "テスト通知です。SAPA通行止め監視くんからiPhoneへ通知できています。" \
+            "https://ntfy.sh/${NTFY_TOPIC}"

@@ -1,0 +1,35 @@
+[
+  {"name":"津軽SA","road":"E4","prefecture":"青森県","staffed":true},
+  {"name":"花輪SA","road":"E4","prefecture":"秋田県","staffed":true},
+  {"name":"岩手山SA","road":"E4","prefecture":"岩手県","staffed":true},
+  {"name":"滝沢PA","road":"E4","prefecture":"岩手県","staffed":true},
+  {"name":"矢巾PA","road":"E4","prefecture":"岩手県","staffed":true},
+  {"name":"紫波SA","road":"E4","prefecture":"岩手県","staffed":true},
+  {"name":"北上金ヶ崎PA","road":"E4","prefecture":"岩手県","staffed":true},
+  {"name":"前沢SA","road":"E4","prefecture":"岩手県","staffed":true},
+  {"name":"金成PA","road":"E4","prefecture":"宮城県","staffed":true},
+  {"name":"長者原SA","road":"E4","prefecture":"宮城県","staffed":true},
+  {"name":"鶴巣PA","road":"E4","prefecture":"宮城県","staffed":true},
+  {"name":"菅生PA","road":"E4","prefecture":"宮城県","staffed":true},
+  {"name":"国見SA","road":"E4","prefecture":"福島県","staffed":true},
+  {"name":"福島松川PA","road":"E4","prefecture":"福島県","staffed":true},
+  {"name":"吾妻PA","road":"E4","prefecture":"福島県","staffed":true},
+  {"name":"安達太良SA","road":"E4","prefecture":"福島県","staffed":true},
+  {"name":"安積PA","road":"E4","prefecture":"福島県","staffed":true},
+  {"name":"鏡石PA","road":"E4","prefecture":"福島県","staffed":true},
+
+  {"name":"折爪SA","road":"E4A","prefecture":"岩手県","staffed":true},
+
+  {"name":"錦秋湖SA","road":"E46","prefecture":"岩手県","staffed":true},
+  {"name":"西仙北SA","road":"E46","prefecture":"秋田県","staffed":true},
+
+  {"name":"古関PA","road":"E48","prefecture":"宮城県","staffed":true},
+  {"name":"寒河江SA","road":"E48","prefecture":"山形県","staffed":true},
+  {"name":"櫛引PA","road":"E48","prefecture":"山形県","staffed":true},
+
+  {"name":"磐梯山SA","road":"E49","prefecture":"福島県","staffed":true},
+  {"name":"阿武隈高原SA","road":"E49","prefecture":"福島県","staffed":true},
+  {"name":"五百川PA","road":"E49","prefecture":"福島県","staffed":true},
+
+  {"name":"四倉PA","road":"E6","prefecture":"福島県","staffed":true}
+]

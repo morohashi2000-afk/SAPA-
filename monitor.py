@@ -3,11 +3,11 @@ import os
 import re
 import urllib.request
 from datetime import datetime, timezone, timedelta
-
 from html.parser import HTMLParser
 
 
 URL = "https://www.drivetraffic.jp/road_closed_information.html"
+
 STATE_FILE = "state.json"
 FACILITIES_FILE = "facilities.json"
 POSITIONS_FILE = "facility_positions.json"
@@ -16,13 +16,10 @@ JST = timezone(timedelta(hours=9))
 
 
 # =========================================================
-# 道路ごとのIC順
-# 数字が小さいほど東京・いわき・村田方面
-# 数字が大きいほど青森・秋田・庄内方面
+# IC・JCTの並び
 # =========================================================
 
 ROUTE_ORDERS = {
-
     "E4": [
         "矢吹",
         "鏡石スマート",
@@ -56,6 +53,7 @@ ROUTE_ORDERS = {
         "平泉前沢",
         "奥州スマート",
         "水沢",
+        "北上JCT",
         "北上金ヶ崎",
         "北上江釣子",
         "花巻南",
@@ -115,7 +113,9 @@ ROUTE_ORDERS = {
         "山形蔵王",
         "山形北",
         "寒河江",
+        "寒河江SAスマート",
         "西川",
+        "西川本線",
         "湯殿山",
         "鶴岡",
         "庄内あさひ",
@@ -162,7 +162,6 @@ ROUTE_ORDERS = {
 }
 
 
-# ドラとらの表記と、こちらの道路コードを対応
 ROAD_MAP = {
     "東北自動車道": "E4",
     "八戸自動車道": "E4A",
@@ -173,314 +172,216 @@ ROAD_MAP = {
 }
 
 
-class TableParser(HTMLParser):
+# =========================================================
+# HTML解析
+# =========================================================
 
+class TableParser(HTMLParser):
     def __init__(self):
         super().__init__()
-
         self.in_td = False
         self.in_th = False
-
-        self.current = []
+        self.current_row = []
         self.rows = []
-        self.row = []
+        self.buffer = ""
 
     def handle_starttag(self, tag, attrs):
-
-        if tag == "tr":
-            self.row = []
-
-        elif tag in ("td", "th"):
+        if tag == "td" or tag == "th":
             self.in_td = tag == "td"
             self.in_th = tag == "th"
-            self.current = []
+            self.buffer = ""
+
+        elif tag == "tr":
+            self.current_row = []
+
+    def handle_data(self, data):
+        if self.in_td or self.in_th:
+            self.buffer += data
 
     def handle_endtag(self, tag):
-
-        if tag in ("td", "th"):
-
-            text = "".join(self.current).strip()
-
-            self.row.append(text)
-
+        if tag == "td" or tag == "th":
+            text = self.buffer.strip()
+            self.current_row.append(text)
             self.in_td = False
             self.in_th = False
 
         elif tag == "tr":
-
-            if self.row:
-                self.rows.append(self.row)
-
-            self.row = []
-
-    def handle_data(self, data):
-
-        if self.in_td or self.in_th:
-            self.current.append(data)
+            if self.current_row:
+                self.rows.append(self.current_row)
 
 
-def fetch_page():
-
-    request = urllib.request.Request(
-        URL,
+def fetch_page(url):
+    req = urllib.request.Request(
+        url,
         headers={
-            "User-Agent":
-                "Mozilla/5.0 "
-                "(iPhone; CPU iPhone OS 18_0 like Mac OS X) "
-                "AppleWebKit/605.1.15 Safari/605.1.15"
+            "User-Agent": "Mozilla/5.0 SAPA-monitor"
         },
     )
 
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return response.read().decode(
-            "utf-8",
-            errors="replace"
-        )
+    with urllib.request.urlopen(req, timeout=30) as response:
+        return response.read().decode("utf-8", errors="ignore")
 
 
 def parse_closures(html):
-
     parser = TableParser()
     parser.feed(html)
 
     closures = []
 
-    headers = [
-        "route",
-        "direction",
-        "section",
-        "reason",
-        "status",
-        "start_time",
-        "update_time",
-        "work",
-        "expected_release",
-        "note",
-    ]
-
     for row in parser.rows:
-
         if len(row) < 6:
             continue
 
-        if "路線名" in row[0]:
+        # Drivetrafficの現在の表
+        # 路線名 / 方向 / 区間 / 理由 / 処理状況 / 通行止開始時間 ...
+        route_name = row[0]
+        direction = row[1]
+        section = row[2]
+        reason = row[3]
+        status = row[4]
+        start_time = row[5]
+
+        if route_name not in ROAD_MAP:
             continue
 
-        row = row[:10] + [""] * (10 - len(row))
-
-        item = dict(zip(headers, row))
-
-        if not item["route"]:
+        if not section:
             continue
 
-        closures.append(item)
+        if not start_time:
+            continue
+
+        closures.append({
+            "route_name": route_name,
+            "route_code": ROAD_MAP[route_name],
+            "direction": direction,
+            "section": section,
+            "reason": reason,
+            "status": status,
+            "start_time": start_time,
+        })
 
     return closures
 
 
-def load_json(filename, default):
+# =========================================================
+# JSON
+# =========================================================
 
+def load_json(filename, default):
     if not os.path.exists(filename):
         return default
 
     try:
-
         with open(filename, "r", encoding="utf-8") as f:
             return json.load(f)
-
     except Exception:
-
         return default
 
 
 def load_state():
-
-    return load_json(
-        STATE_FILE,
-        {
-            "active": {},
-            "released": []
-        }
-    )
+    return load_json(STATE_FILE, {})
 
 
 def load_facilities():
-
-    return load_json(
-        FACILITIES_FILE,
-        []
-    )
+    return load_json(FACILITIES_FILE, [])
 
 
 def load_positions():
-
-    return load_json(
-        POSITIONS_FILE,
-        []
-    )
+    return load_json(POSITIONS_FILE, [])
 
 
 def save_state(state):
-
-    with open(
-        STATE_FILE,
-        "w",
-        encoding="utf-8"
-    ) as f:
-
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(
             state,
             f,
             ensure_ascii=False,
-            indent=2
+            indent=2,
         )
 
 
-def make_id(item):
+# =========================================================
+# 名前処理
+# =========================================================
 
-    values = [
-        item.get("route", ""),
-        item.get("direction", ""),
-        item.get("section", ""),
-        item.get("start_time", ""),
-    ]
+def normalize_name(name):
+    if not name:
+        return ""
 
-    return "|".join(values)
+    name = name.strip()
 
+    # 全角スペース・半角スペース除去
+    name = name.replace("　", "")
+    name = name.replace(" ", "")
 
-def now_jst():
+    # 表記ゆれ
+    name = name.replace("ＩＣ", "IC")
+    name = name.replace("ＪＣＴ", "JCT")
+    name = name.replace("ＰＡ", "PA")
+    name = name.replace("ＳＡ", "SA")
 
-    return datetime.now(
-        JST
-    ).isoformat(
-        timespec="seconds"
-    )
+    name = name.replace("スマートIC", "スマート")
+    name = name.replace("スマートＩＣ", "スマート")
 
-
-def normalize_name(text):
-
-    text = text.strip()
-
-    text = text.replace(
-        "　",
-        ""
-    )
-
-    text = text.replace(
-        " ",
-        ""
-    )
-
-    text = text.replace(
-        "ＩＣ",
-        "IC"
-    )
-
-    text = text.replace(
-        "ＪＣＴ",
-        "JCT"
-    )
-
-    text = text.replace(
-        "スマートIC",
-        "スマート"
-    )
-
-    text = text.replace(
-        "ＰＡ",
-        "PA"
-    )
-
-    text = text.replace(
-        "ＳＡ",
-        "SA"
-    )
-
-    return text
+    return name
 
 
 def canonical_ic_name(name):
-
     name = normalize_name(name)
 
     aliases = {
-
         "村田JCT": "村田",
         "富谷JCT": "富谷",
-        "北上JCT": "北上金ヶ崎",
         "郡山JCT": "郡山",
         "福島JCT": "福島JCT",
 
-        "矢巾スマートIC": "矢巾スマート",
         "鏡石スマートIC": "鏡石スマート",
-        "長者原スマートIC": "長者原スマート",
+        "郡山中央スマートIC": "郡山中央スマート",
+        "福島松川スマートIC": "福島松川スマート",
         "泉PAスマートIC": "泉PAスマート",
+        "長者原スマートIC": "長者原スマート",
+        "矢巾スマートIC": "矢巾スマート",
         "滝沢中央スマートIC": "滝沢中央スマート",
-        "西仙北スマートIC": "西仙北スマート",
-        "横手北スマートIC": "横手北スマート",
+        "平泉スマートIC": "平泉スマート",
+        "奥州スマートIC": "奥州スマート",
+        "花巻南スマートIC": "花巻南",
+        "新鶴スマートIC": "新鶴スマート",
         "田村スマートIC": "田村スマート",
-        "ならはスマートIC": "ならはスマート",
         "南相馬鹿島スマートIC": "南相馬鹿島スマート",
-
+        "ならはスマートIC": "ならはスマート",
+        "横手北スマートIC": "横手北スマート",
+        "西仙北スマートIC": "西仙北スマート",
+        "八戸西スマートIC": "八戸西スマート",
     }
 
-    return aliases.get(
-        name,
-        name
-    )
+    return aliases.get(name, name)
 
 
-def get_route_code(route):
+# =========================================================
+# 通行止め区間
+# =========================================================
 
-    route = normalize_name(route)
-
-    for name, code in ROAD_MAP.items():
-
-        if normalize_name(name) in route:
-            return code
-
-    if route in ROUTE_ORDERS:
-        return route
-
-    return None
+def get_route_code(route_name):
+    return ROAD_MAP.get(route_name)
 
 
 def split_section(section):
+    if not section:
+        return []
 
-    section = normalize_name(section)
+    parts = re.split(r"[～〜~ー－\-→]", section)
 
-    parts = re.split(
-        r"[～〜~ー－\-→]+",
-        section
-    )
-
-    parts = [
-        p.strip()
-        for p in parts
-        if p.strip()
+    return [
+        canonical_ic_name(x)
+        for x in parts
+        if x.strip()
     ]
-
-    if len(parts) < 2:
-        return None, None
-
-    return (
-        canonical_ic_name(parts[0]),
-        canonical_ic_name(parts[-1])
-    )
 
 
 def route_index(route_code, ic_name):
+    ic_name = canonical_ic_name(ic_name)
 
-    if route_code not in ROUTE_ORDERS:
-        return None
-
-    ic_name = canonical_ic_name(
-        ic_name
-    )
-
-    order = ROUTE_ORDERS[
-        route_code
-    ]
+    order = ROUTE_ORDERS.get(route_code, [])
 
     normalized_order = [
         canonical_ic_name(x)
@@ -488,127 +389,107 @@ def route_index(route_code, ic_name):
     ]
 
     try:
-        return normalized_order.index(
-            ic_name
-        )
-
+        return normalized_order.index(ic_name)
     except ValueError:
         return None
 
 
-def facility_position(
-    route_code,
-    position
-):
+# =========================================================
+# SAPA位置
+# =========================================================
 
-    before = route_index(
-        route_code,
-        position.get("before", "")
-    )
+def facility_position(facility, positions):
+    name = facility.get("name")
 
-    after = route_index(
-        route_code,
-        position.get("after", "")
-    )
+    # 北上金ヶ崎PAは公式施設情報上、
+    # 上り線で「北上JCT～水沢」の間。
+    # 現在のJSONに古い値が残っていても、
+    # ここでは正しい位置を優先する。
+    if name == "北上金ヶ崎PA":
+        return {
+            "before": "北上JCT",
+            "after": "水沢",
+        }
 
-    if before is None or after is None:
-        return None
+    for item in positions:
+        if item.get("name") == name:
+            return {
+                "before": item.get("before"),
+                "after": item.get("after"),
+            }
 
-    return (
-        before + after
-    ) / 2
+    return None
 
 
 def find_facilities_in_closure(
-    item,
+    route_code,
+    section,
     facilities,
-    positions
+    positions,
 ):
+    endpoints = split_section(section)
 
-    route_code = get_route_code(
-        item.get("route", "")
-    )
-
-    if not route_code:
+    if len(endpoints) < 2:
         return []
 
-    start_ic, end_ic = split_section(
-        item.get("section", "")
-    )
+    start = route_index(route_code, endpoints[0])
+    end = route_index(route_code, endpoints[1])
 
-    if not start_ic or not end_ic:
+    if start is None or end is None:
         return []
 
-    start_index = route_index(
-        route_code,
-        start_ic
-    )
+    low = min(start, end)
+    high = max(start, end)
 
-    end_index = route_index(
-        route_code,
-        end_ic
-    )
-
-    if start_index is None or end_index is None:
-        print(
-            "IC位置を判定できません:",
-            item.get("section")
-        )
-        return []
-
-    low = min(
-        start_index,
-        end_index
-    )
-
-    high = max(
-        start_index,
-        end_index
-    )
-
-    position_map = {
-        p.get("name"): p
-        for p in positions
-    }
-
-    matches = []
+    matched = []
 
     for facility in facilities:
+        if not facility.get("staffed"):
+            continue
 
         if facility.get("road") != route_code:
             continue
 
-        if not facility.get("staffed", False):
-            continue
-
-        position = position_map.get(
-            facility.get("name")
+        position = facility_position(
+            facility,
+            positions,
         )
 
         if not position:
             continue
 
-        facility_index = facility_position(
+        before = route_index(
             route_code,
-            position
+            position["before"],
         )
 
-        if facility_index is None:
+        after = route_index(
+            route_code,
+            position["after"],
+        )
+
+        if before is None or after is None:
             continue
 
-        if low < facility_index < high:
+        facility_low = min(before, after)
+        facility_high = max(before, after)
 
-            matches.append(
-                facility
-            )
+        # SAPAが通行止め区間内にあるか判定
+        if facility_high >= low and facility_low <= high:
+            matched.append(facility["name"])
 
-    return matches
+    return matched
 
 
-def parse_datetime(text):
+# =========================================================
+# 日時
+# =========================================================
 
-    if not text:
+def parse_datetime(value):
+    if not value:
         return None
+
+    value = value.strip()
 
     formats = [
         "%Y/%m/%d %H:%M",
@@ -618,98 +499,212 @@ def parse_datetime(text):
     ]
 
     for fmt in formats:
-
         try:
-
-            dt = datetime.strptime(
-                text.strip(),
-                fmt
-            )
-
-            return dt.replace(
-                tzinfo=JST
-            )
-
+            return datetime.strptime(
+                value,
+                fmt,
+            ).replace(tzinfo=JST)
         except ValueError:
             pass
 
     return None
 
 
-def duration_hours(start_text):
+def now_jst():
+    return datetime.now(JST)
 
-    start = parse_datetime(
-        start_text
-    )
 
-    if not start:
+def duration_hours(start_time):
+    start = parse_datetime(start_time)
+
+    if start is None:
         return None
 
-    now = datetime.now(JST)
-
     seconds = (
-        now - start
+        now_jst() - start
     ).total_seconds()
 
     return seconds / 3600
 
 
-def main():
+# =========================================================
+# ID
+# =========================================================
 
-    print(
-        "SAPA通行止め監視くん 起動"
-    )
+def make_id(item):
+    raw = "|".join([
+        item.get("route_code", ""),
+        item.get("direction", ""),
+        item.get("section", ""),
+        item.get("start_time", ""),
+    ])
 
-    state = load_state()
+    return raw
+
+
+# =========================================================
+# テストモード
+# =========================================================
+
+def run_test_mode():
+    print("=" * 60)
+    print("SAPA通行止め監視くん TEST MODE")
+    print("=" * 60)
+    print("NEXCOの実データは取得しません。")
+    print("仮想通行止めを使ってSAPA判定をテストします。")
+    print()
 
     facilities = load_facilities()
-
     positions = load_positions()
 
-    print(
-        f"有人SAPAマスター: "
-        f"{len(facilities)}件"
-    )
-
-    try:
-
-        html = fetch_page()
-
-        closures = parse_closures(
-            html
+    if not facilities:
+        raise RuntimeError(
+            "facilities.json が読み込めません。"
         )
 
-    except Exception as e:
+    if not positions:
+        raise RuntimeError(
+            "facility_positions.json が読み込めません。"
+        )
 
+    print(
+        f"対象SAPA数: {len(facilities)}"
+    )
+
+    if len(facilities) != 28:
+        raise RuntimeError(
+            f"SAPA数が28ではありません: {len(facilities)}"
+        )
+
+    # 7時間前の時刻を作る
+    test_start = (
+        now_jst() - timedelta(hours=7)
+    ).strftime("%Y/%m/%d %H:%M")
+
+    test_cases = [
+        {
+            "name": "東北道・盛岡南～水沢",
+            "route_code": "E4",
+            "direction": "東京方面",
+            "section": "盛岡南～水沢",
+            "expected": [
+                "矢巾PA",
+                "紫波SA",
+                "北上金ヶ崎PA",
+                "前沢SA",
+            ],
+        },
+        {
+            "name": "秋田道・湯田～協和",
+            "route_code": "E46",
+            "direction": "秋田方面",
+            "section": "湯田～協和",
+            "expected": [
+                "錦秋湖SA",
+                "西仙北SA",
+            ],
+        },
+        {
+            "name": "磐越道・小野～磐梯河東",
+            "route_code": "E49",
+            "direction": "新潟方面",
+            "section": "小野～磐梯河東",
+            "expected": [
+                "阿武隈高原SA",
+                "磐梯山SA",
+            ],
+        },
+        {
+            "name": "常磐道・いわき勿来～広野",
+            "route_code": "E6",
+            "direction": "仙台方面",
+            "section": "いわき勿来～広野",
+            "expected": [
+                "四倉PA",
+            ],
+        },
+        {
+            "name": "山形道・笹谷～宮城川崎",
+            "route_code": "E48",
+            "direction": "山形方面",
+            "section": "笹谷～宮城川崎",
+            "expected": [
+                "古関PA",
+            ],
+        },
+        {
+            "name": "東北道・築館～一関",
+            "route_code": "E4",
+            "direction": "青森方面",
+            "section": "築館～一関",
+            "expected": [
+                "金成PA",
+            ],
+        },
+        {
+            "name": "東北道・白石～国見",
+            "route_code": "E4",
+            "direction": "東京方面",
+            "section": "白石～国見",
+            "expected": [
+                "国見SA",
+            ],
+        },
+        {
+            "name": "山形道・鶴岡～庄内あさひ",
+            "route_code": "E48",
+            "direction": "鶴岡方面",
+            "section": "鶴岡～庄内あさひ",
+            "expected": [
+                "櫛引PA",
+            ],
+        },
+    ]
+
+    passed = 0
+
+    print()
+
+    for i, case in enumerate(test_cases, start=1):
+        print("-" * 60)
         print(
-            "NEXCO情報の取得に失敗しました"
+            f"TEST {i}: {case['name']}"
         )
-
-        print(e)
-
-        raise
-
-    print(
-        f"現在の通行止め件数: "
-        f"{len(closures)}"
-    )
-
-    current = {}
-
-    for item in closures:
-
-        event_id = make_id(
-            item
+        print(
+            f"区間: {case['section']}"
         )
 
         matched = find_facilities_in_closure(
-            item,
+            case["route_code"],
+            case["section"],
             facilities,
-            positions
+            positions,
         )
 
+        matched_sorted = sorted(matched)
+        expected_sorted = sorted(
+            case["expected"]
+        )
+
+        print(
+            f"検出: {matched_sorted}"
+        )
+        print(
+            f"期待: {expected_sorted}"
+        )
+
+        if matched_sorted != expected_sorted:
+            print("❌ FAIL")
+            raise RuntimeError(
+                f"TEST {i} failed: "
+                f"expected={expected_sorted}, "
+                f"actual={matched_sorted}"
+            )
+
+        # 7時間経過している想定なので
+        # 6時間以上判定も確認
         hours = duration_hours(
-            item.get("start_time", "")
+            test_start
         )
 
         report_candidate = (
@@ -718,99 +713,187 @@ def main():
             and len(matched) > 0
         )
 
-        current[event_id] = {
-
-            **item,
-
-            "first_seen":
-                state["active"]
-                .get(event_id, {})
-                .get(
-                    "first_seen",
-                    now_jst()
-                ),
-
-            "matched_facilities": [
-                facility["name"]
-                for facility in matched
-            ],
-
-            "duration_hours":
-                round(hours, 2)
-                if hours is not None
-                else None,
-
-            "report_candidate":
-                report_candidate,
-        }
-
-        if matched:
-
+        if not report_candidate:
             print(
-                "有人SAPA該当:",
-                item.get("route"),
-                item.get("section"),
-                "→",
-                ", ".join(
-                    facility["name"]
-                    for facility in matched
-                )
+                "❌ FAIL: "
+                "6時間以上の報告対象判定に失敗"
             )
 
-        if report_candidate:
-
-            print(
-                "★ 6時間以上・報告候補:",
-                item.get("route"),
-                item.get("section")
+            raise RuntimeError(
+                f"TEST {i} report_candidate failed"
             )
-
-    previous_ids = set(
-        state["active"].keys()
-    )
-
-    current_ids = set(
-        current.keys()
-    )
-
-    released_ids = (
-        previous_ids
-        - current_ids
-    )
-
-    for event_id in released_ids:
-
-        event = state["active"][
-            event_id
-        ]
-
-        event[
-            "release_detected"
-        ] = now_jst()
 
         print(
-            "通行止め解除を検知:",
-            event.get("route"),
-            event.get("section")
+            f"経過時間: {hours:.2f}時間"
         )
-
-        state["released"].append(
-            event
+        print(
+            "報告対象判定: True"
         )
+        print("✅ PASS")
 
-    state["released"] = (
-        state["released"][-2000:]
+        passed += 1
+
+    print()
+    print("=" * 60)
+    print(
+        f"TEST COMPLETE: {passed}/{len(test_cases)} PASS"
     )
-
-    state["active"] = current
-
-    save_state(
-        state
+    print("=" * 60)
+    print(
+        "SAPA判定・6時間判定ともに正常です。"
     )
+    print(
+        "state.json は変更していません。"
+    )
+    print()
+
+
+# =========================================================
+# 通常監視
+# =========================================================
+
+def main():
+    # TEST_MODE=true のときはテストだけ実行
+    if os.environ.get(
+        "TEST_MODE",
+        ""
+    ).lower() == "true":
+        run_test_mode()
+        return
+
+    print("=" * 60)
+    print("SAPA通行止め監視くん")
+    print("=" * 60)
+
+    state = load_state()
+    facilities = load_facilities()
+    positions = load_positions()
 
     print(
-        "状態保存完了"
+        f"現在の状態件数: {len(state)}"
     )
+    print(
+        f"対象SAPA数: {len(facilities)}"
+    )
+
+    html = fetch_page(URL)
+    closures = parse_closures(html)
+
+    print(
+        f"現在の通行止め件数: {len(closures)}"
+    )
+
+    current_ids = set()
+
+    for closure in closures:
+        route_code = closure["route_code"]
+
+        matched = find_facilities_in_closure(
+            route_code,
+            closure["section"],
+            facilities,
+            positions,
+        )
+
+        hours = duration_hours(
+            closure["start_time"]
+        )
+
+        report_candidate = (
+            hours is not None
+            and hours >= 6
+            and len(matched) > 0
+        )
+
+        closure_id = make_id(
+            closure
+        )
+
+        current_ids.add(closure_id)
+
+        state[closure_id] = {
+            **closure,
+            "matched_facilities": matched,
+            "duration_hours": hours,
+            "report_candidate": report_candidate,
+            "last_seen": now_jst().isoformat(),
+        }
+
+        print()
+        print(
+            f"通行止め: "
+            f"{closure['route_name']} "
+            f"{closure['section']}"
+        )
+
+        print(
+            f"理由: {closure['reason']}"
+        )
+
+        print(
+            f"開始: {closure['start_time']}"
+        )
+
+        print(
+            f"経過時間: "
+            f"{hours:.2f}時間"
+            if hours is not None
+            else "不明"
+        )
+
+        print(
+            f"該当SAPA: "
+            f"{matched}"
+        )
+
+        print(
+            f"報告候補: "
+            f"{report_candidate}"
+        )
+
+    # =====================================================
+    # 前回存在していたが、今回消えた通行止め
+    # =====================================================
+
+    disappeared = []
+
+    for closure_id, old in list(state.items()):
+        if closure_id not in current_ids:
+            if not old.get(
+                "release_detected"
+            ):
+                old["release_detected"] = (
+                    now_jst().isoformat()
+                )
+
+                disappeared.append(
+                    old
+                )
+
+    if disappeared:
+        print()
+        print(
+            f"解除を検知した通行止め: "
+            f"{len(disappeared)}件"
+        )
+
+        for item in disappeared:
+            print(
+                f"- {item.get('route_name')} "
+                f"{item.get('section')}"
+            )
+            print(
+                f"  解除検知: "
+                f"{item.get('release_detected')}"
+            )
+
+    save_state(state)
+
+    print()
+    print(
+        "状態を保存しました。"
+    )
+    print()
 
 
 if __name__ == "__main__":

@@ -1,78 +1,100 @@
 import json
 import os
 import urllib.request
-from datetime import datetime, timezone, timedelta
-
-
-STATE_FILE = "state.json"
-FACILITIES_FILE = "facilities.json"
+from datetime import datetime, timedelta, timezone
 
 JST = timezone(timedelta(hours=9))
 
 
-# ============================================================
-# 通知対象の都道府県
-# ============================================================
-
-TARGET_PREFECTURES = {
-    "青森県",
-    "岩手県",
-    "秋田県",
-}
+def now_jst():
+    return datetime.now(JST)
 
 
-# ============================================================
-# JSON読み込み
-# ============================================================
-
-def load_json(filename, default):
-    if not os.path.exists(filename):
-        return default
-
-    try:
-        with open(filename, "r", encoding="utf-8") as f:
-            return json.load(f)
-
-    except Exception as e:
-        print(f"{filename} の読み込みに失敗しました: {e}")
-        return default
+def load_json(filename):
+    with open(filename, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
-# ============================================================
-# 日時処理
-# ============================================================
+def load_settings():
+    settings = load_json("settings.json")
+
+    prefectures = settings.get("notification_prefectures")
+
+    if not isinstance(prefectures, list):
+        raise RuntimeError(
+            "settings.json の notification_prefectures がリストになっていません。"
+        )
+
+    valid_prefectures = {
+        "北海道",
+        "青森県",
+        "岩手県",
+        "宮城県",
+        "秋田県",
+        "山形県",
+        "福島県",
+        "茨城県",
+        "栃木県",
+        "群馬県",
+        "埼玉県",
+        "千葉県",
+        "東京都",
+        "神奈川県",
+        "新潟県",
+        "長野県",
+    }
+
+    invalid = [p for p in prefectures if p not in valid_prefectures]
+
+    if invalid:
+        raise RuntimeError(
+            "settings.json に不正な都道府県があります: "
+            + ", ".join(invalid)
+        )
+
+    if not prefectures:
+        raise RuntimeError(
+            "notification_prefectures が空です。"
+            "少なくとも1つ都道府県を設定してください。"
+        )
+
+    return set(prefectures)
+
 
 def parse_datetime(value):
     if not value:
         return None
 
+    value = value.strip()
+
+    # ISO形式
     try:
         dt = datetime.fromisoformat(value)
-
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=JST)
-
         return dt.astimezone(JST)
+    except ValueError:
+        pass
 
-    except Exception as e:
-        print(f"日時の解析に失敗しました: {value} / {e}")
-        return None
+    # よくあるNEXCO表記
+    formats = [
+        "%Y/%m/%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+    ]
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(value, fmt).replace(tzinfo=JST)
+        except ValueError:
+            continue
+
+    return None
 
 
-def format_datetime(value):
-    dt = parse_datetime(value)
-
-    if dt is None:
-        return "不明"
-
-    return dt.strftime("%m/%d %H:%M")
-
-
-def calculate_duration_hours(start_time, end_time):
-    start = parse_datetime(start_time)
-    end = parse_datetime(end_time)
-
-    if start is None or end is None:
+def duration_hours(start, end):
+    if not start or not end:
         return None
 
     seconds = (end - start).total_seconds()
@@ -83,63 +105,32 @@ def calculate_duration_hours(start_time, end_time):
     return seconds / 3600
 
 
-# ============================================================
-# 解除時刻が「前日17:30～当日08:00」か
-# ============================================================
+def format_dt(dt):
+    if not dt:
+        return "不明"
 
-def is_overnight_release(release_dt, now):
-    if release_dt is None:
-        return False
-
-    today_0800 = now.replace(
-        hour=8,
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
-
-    yesterday_1730 = today_0800 - timedelta(days=1)
-
-    return yesterday_1730 <= release_dt <= today_0800
+    return dt.strftime("%Y/%m/%d %H:%M")
 
 
-# ============================================================
-# 対象都道府県の有人SAPAを取得
-# ============================================================
+def format_duration(hours):
+    if hours is None:
+        return "不明"
 
-def get_notification_facilities(item, facility_prefecture):
+    total_minutes = round(hours * 60)
+    h = total_minutes // 60
+    m = total_minutes % 60
 
-    matched = item.get("matched_facilities", [])
+    if m == 0:
+        return f"{h}時間"
 
-    if not isinstance(matched, list):
-        return []
+    return f"{h}時間{m}分"
 
-    result = []
-
-    for sapa in matched:
-        prefecture = facility_prefecture.get(sapa)
-
-        if prefecture in TARGET_PREFECTURES:
-            result.append(sapa)
-
-    return result
-
-
-# ============================================================
-# ntfy通知
-#
-# HTTPヘッダーに日本語を入れるとurllibがlatin-1で
-# エラーになるため、JSON APIとしてUTF-8で送信する。
-# ============================================================
 
 def send_ntfy(message):
-
     topic = os.environ.get("NTFY_TOPIC", "")
 
     if not topic:
-        raise RuntimeError(
-            "NTFY_TOPIC が設定されていません。"
-        )
+        raise RuntimeError("NTFY_TOPIC が設定されていません。")
 
     url = "https://ntfy.sh"
 
@@ -151,461 +142,240 @@ def send_ntfy(message):
         "tags": ["highway"],
     }
 
-    data = json.dumps(
-        payload,
-        ensure_ascii=False,
-    ).encode("utf-8")
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
     request = urllib.request.Request(
         url,
         data=data,
         headers={
-            "Content-Type": "application/json; charset=utf-8",
+            "Content-Type": "application/json; charset=utf-8"
         },
         method="POST",
     )
 
-    with urllib.request.urlopen(
-        request,
-        timeout=30,
-    ) as response:
-
+    with urllib.request.urlopen(request, timeout=30) as response:
         if response.status < 200 or response.status >= 300:
             raise RuntimeError(
                 f"ntfy通知失敗: HTTP {response.status}"
             )
 
 
-# ============================================================
-# メイン処理
-# ============================================================
+def facility_matches_prefecture(facility, target_prefectures):
+    return (
+        facility.get("staffed") is True
+        and facility.get("prefecture") in target_prefectures
+    )
+
+
+def get_release_time(item):
+    """
+    現時点では release_detected を使用。
+    これは監視側が「通行止め一覧から消えた」と確認した時刻であり、
+    NEXCO公式の実解除時刻そのものではない。
+    """
+    return parse_datetime(item.get("release_detected"))
+
 
 def main():
+    now = now_jst()
 
-    print("=" * 60)
-    print("SAPA通行止め監視くん 08:00 REPORT")
-    print("=" * 60)
+    settings = load_settings()
+    state = load_json("state.json")
+    facilities = load_json("facilities.json")
 
-    now = datetime.now(JST)
+    # state.json が旧形式のリストの場合にも対応
+    if isinstance(state, list):
+        state_items = state
+    elif isinstance(state, dict):
+        state_items = state.get("closures", [])
+    else:
+        raise RuntimeError("state.json の形式が不正です。")
 
-    print(
-        "現在時刻："
-        + now.strftime("%Y-%m-%d %H:%M:%S")
+    # 前日17:30 ～ 当日08:00
+    report_start = now.replace(
+        hour=17,
+        minute=30,
+        second=0,
+        microsecond=0,
+    ) - timedelta(days=1)
+
+    report_end = now.replace(
+        hour=8,
+        minute=0,
+        second=0,
+        microsecond=0,
     )
-
-    # --------------------------------------------------------
-    # ファイル読み込み
-    # --------------------------------------------------------
-
-    state = load_json(
-        STATE_FILE,
-        {},
-    )
-
-    facilities = load_json(
-        FACILITIES_FILE,
-        [],
-    )
-
-    if not isinstance(state, dict):
-        raise RuntimeError(
-            "state.json が辞書形式ではありません。"
-        )
-
-    if not isinstance(facilities, list):
-        raise RuntimeError(
-            "facilities.json がリスト形式ではありません。"
-        )
-
-    # --------------------------------------------------------
-    # SAPA → 都道府県
-    # --------------------------------------------------------
-
-    facility_prefecture = {}
-
-    for facility in facilities:
-
-        if not isinstance(facility, dict):
-            continue
-
-        name = facility.get("name", "")
-        prefecture = facility.get("prefecture", "")
-
-        if name and prefecture:
-            facility_prefecture[name] = prefecture
-
-    print(
-        "通知対象都道府県："
-        + ", ".join(sorted(TARGET_PREFECTURES))
-    )
-
-    # --------------------------------------------------------
-    # 報告候補
-    # --------------------------------------------------------
 
     candidates = []
 
-    for closure_id, item in state.items():
+    for item in state_items:
+        matched_facilities = []
 
-        if not isinstance(item, dict):
+        for facility in facilities:
+            if not facility_matches_prefecture(
+                facility,
+                settings,
+            ):
+                continue
+
+            matched_names = item.get("matched_facilities", [])
+
+            if facility.get("name") in matched_names:
+                matched_facilities.append(facility)
+
+        if not matched_facilities:
             continue
 
-        # ----------------------------------------------------
-        # 開始時刻
-        # ----------------------------------------------------
+        start = parse_datetime(
+            item.get("start_time")
+            or item.get("closure_start")
+        )
 
-        start_time = item.get("start_time")
-
-        start_dt = parse_datetime(start_time)
-
-        if start_dt is None:
+        if not start:
             continue
 
-        # ----------------------------------------------------
-        # 該当SAPA
-        # ----------------------------------------------------
+        release = get_release_time(item)
 
-        notification_facilities = (
-            get_notification_facilities(
-                item,
-                facility_prefecture,
+        # 現在も通行止め中
+        if release is None:
+            hours = duration_hours(start, now)
+
+            if hours is not None and hours >= 6:
+                candidates.append(
+                    {
+                        "item": item,
+                        "facilities": matched_facilities,
+                        "start": start,
+                        "release": None,
+                        "hours": hours,
+                    }
+                )
+
+            continue
+
+        # 08:00時点までに解除されたもの
+        # かつ、解除時刻が前日17:30～当日08:00
+        if report_start <= release <= report_end:
+            hours = duration_hours(start, release)
+
+            if hours is not None and hours >= 6:
+                candidates.append(
+                    {
+                        "item": item,
+                        "facilities": matched_facilities,
+                        "start": start,
+                        "release": release,
+                        "hours": hours,
+                    }
+                )
+
+    # 重複除去
+    unique = {}
+
+    for candidate in candidates:
+        item = candidate["item"]
+
+        key = (
+            item.get("id")
+            or item.get("closure_id")
+            or (
+                item.get("route"),
+                item.get("section"),
+                item.get("start_time"),
             )
         )
 
-        # 対象都道府県の有人SAPAがなければ通知しない
-        if not notification_facilities:
-            continue
+        unique[key] = candidate
 
-        # ----------------------------------------------------
-        # 解除時刻
-        # ----------------------------------------------------
+    candidates = list(unique.values())
 
-        release_value = item.get(
-            "release_detected"
-        )
-
-        release_dt = parse_datetime(
-            release_value
-        )
-
-        # ====================================================
-        # ① 現在も通行止め中
-        # ====================================================
-
-        if release_dt is None:
-
-            duration_hours = (
-                calculate_duration_hours(
-                    start_time,
-                    now.isoformat(),
-                )
-            )
-
-            if duration_hours is None:
-                continue
-
-            # 6時間未満なら対象外
-            if duration_hours < 6:
-                continue
-
-            item_copy = dict(item)
-
-            item_copy[
-                "notification_facilities"
-            ] = notification_facilities
-
-            item_copy[
-                "notification_release"
-            ] = None
-
-            item_copy[
-                "notification_duration"
-            ] = duration_hours
-
-            item_copy[
-                "notification_type"
-            ] = "継続中"
-
-            candidates.append(item_copy)
-
-            print(
-                "報告候補（継続中）："
-                + str(
-                    item.get(
-                        "route_name",
-                        "不明",
-                    )
-                )
-                + " "
-                + str(
-                    item.get(
-                        "section",
-                        "不明",
-                    )
-                )
-                + f" {duration_hours:.1f}時間"
-            )
-
-            continue
-
-        # ====================================================
-        # ② 解除済み
-        #
-        # 前日17:30～当日08:00に解除
-        # かつ6時間以上
-        # ====================================================
-
-        if is_overnight_release(
-            release_dt,
-            now,
-        ):
-
-            duration_hours = (
-                calculate_duration_hours(
-                    start_time,
-                    release_value,
-                )
-            )
-
-            if duration_hours is None:
-                continue
-
-            # 6時間未満なら対象外
-            if duration_hours < 6:
-                continue
-
-            item_copy = dict(item)
-
-            item_copy[
-                "notification_facilities"
-            ] = notification_facilities
-
-            item_copy[
-                "notification_release"
-            ] = release_dt
-
-            item_copy[
-                "notification_duration"
-            ] = duration_hours
-
-            item_copy[
-                "notification_type"
-            ] = "解除済み"
-
-            candidates.append(item_copy)
-
-            print(
-                "報告候補（解除済み）："
-                + str(
-                    item.get(
-                        "route_name",
-                        "不明",
-                    )
-                )
-                + " "
-                + str(
-                    item.get(
-                        "section",
-                        "不明",
-                    )
-                )
-                + f" {duration_hours:.1f}時間"
-                + " 解除 "
-                + release_dt.strftime(
-                    "%m/%d %H:%M"
-                )
-            )
-
-    # ========================================================
-    # 通知本文作成
-    # ========================================================
+    lines = [
+        "【08:00 本社報告確認】",
+        "",
+        f"通知対象都道府県：{'、'.join(sorted(settings))}",
+        "",
+    ]
 
     if not candidates:
-
-        message = (
-            "本社報告確認（08:00）\n"
-            "\n"
-            "本日、報告対象となる通行止めはありません。"
-        )
+        lines.append("本社報告対象の通行止めはありません。")
 
     else:
+        lines.append(
+            f"本社報告対象：{len(candidates)}件"
+        )
+        lines.append("")
 
-        lines = [
-            "本社報告確認（08:00）",
-            "",
-            f"報告対象：{len(candidates)}件",
-            "",
-        ]
+        for i, candidate in enumerate(candidates, 1):
+            item = candidate["item"]
+            facilities_matched = candidate["facilities"]
 
-        for index, item in enumerate(
-            candidates,
-            start=1,
-        ):
-
-            route_name = item.get(
-                "route_name",
-                "不明",
+            route = (
+                item.get("route")
+                or item.get("road")
+                or "不明"
             )
 
-            direction = item.get(
-                "direction",
-                "不明",
+            direction = item.get("direction") or "不明"
+
+            section = (
+                item.get("section")
+                or item.get("区間")
+                or "不明"
             )
 
-            section = item.get(
-                "section",
-                "不明",
+            reason = (
+                item.get("reason")
+                or item.get("cause")
+                or item.get("理由")
+                or "不明"
             )
-
-            start_time = item.get(
-                "start_time",
-                "不明",
-            )
-
-            reason = item.get(
-                "reason",
-                "不明",
-            )
-
-            duration_hours = item.get(
-                "notification_duration"
-            )
-
-            notification_type = item.get(
-                "notification_type",
-                "不明",
-            )
-
-            matched = item.get(
-                "notification_facilities",
-                [],
-            )
-
-            # ------------------------------------------------
-            # 都道府県
-            # ------------------------------------------------
 
             prefectures = sorted(
-                set(
-                    facility_prefecture.get(
-                        sapa,
-                        "不明",
-                    )
-                    for sapa in matched
-                )
+                {
+                    f.get("prefecture")
+                    for f in facilities_matched
+                    if f.get("prefecture")
+                }
             )
 
-            prefecture_text = ", ".join(
-                prefectures
+            facility_names = [
+                f.get("name")
+                for f in facilities_matched
+            ]
+
+            lines.append(f"【{i}】")
+            lines.append(
+                f"都道府県：{'、'.join(prefectures)}"
+            )
+            lines.append(f"路線：{route}")
+            lines.append(f"方向：{direction}")
+            lines.append(f"区間：{section}")
+            lines.append(
+                f"通行止開始：{format_dt(candidate['start'])}"
             )
 
-            # ------------------------------------------------
-            # 経過時間
-            # ------------------------------------------------
-
-            if duration_hours is not None:
-
-                duration_text = (
-                    f"{duration_hours:.1f}時間"
+            if candidate["release"]:
+                lines.append(
+                    f"解除確認：{format_dt(candidate['release'])}"
                 )
-
             else:
-
-                duration_text = "不明"
-
-            # ------------------------------------------------
-            # 解除時刻
-            # ------------------------------------------------
-
-            if notification_type == "解除済み":
-
-                release_text = format_datetime(
-                    item.get(
-                        "release_detected"
-                    )
-                )
-
-            else:
-
-                release_text = "通行止め継続中"
-
-            # ------------------------------------------------
-            # 本文
-            # ------------------------------------------------
+                lines.append("解除確認：未解除")
 
             lines.append(
-                f"【{index}】"
+                f"通行止め時間：{format_duration(candidate['hours'])}"
             )
-
+            lines.append(f"原因：{reason}")
             lines.append(
-                f"都道府県：{prefecture_text}"
+                f"対象SAPA：{'、'.join(facility_names)}"
             )
-
-            lines.append(
-                f"路線：{route_name}"
-            )
-
-            lines.append(
-                f"方向：{direction}"
-            )
-
-            lines.append(
-                f"区間：{section}"
-            )
-
-            lines.append(
-                f"開始：{format_datetime(start_time)}"
-            )
-
-            lines.append(
-                f"解除：{release_text}"
-            )
-
-            lines.append(
-                f"経過：{duration_text}"
-            )
-
-            lines.append(
-                f"原因：{reason}"
-            )
-
-            lines.append(
-                "該当SAPA："
-                + ", ".join(matched)
-            )
-
-            lines.append(
-                "→ 本社報告対象"
-            )
-
+            lines.append("→ 本社報告対象")
             lines.append("")
 
-        message = "\n".join(lines)
+    message = "\n".join(lines)
 
-    # ========================================================
-    # ログ出力
-    # ========================================================
-
-    print()
-    print("-" * 60)
     print(message)
-    print("-" * 60)
-
-    print(
-        f"通知対象件数：{len(candidates)}件"
-    )
-
-    # ========================================================
-    # ntfy通知
-    # ========================================================
-
-    print("ntfyへ通知します。")
 
     send_ntfy(message)
-
-    print("通知成功")
-
-    print("=" * 60)
 
 
 if __name__ == "__main__":

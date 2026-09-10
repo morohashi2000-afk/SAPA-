@@ -1,4 +1,3 @@
-import json
 from datetime import datetime, timezone, timedelta
 
 import morning_report
@@ -12,8 +11,9 @@ JST = timezone(timedelta(hours=9))
 #
 # 2026/09/09 01:00 に通行止め開始
 # 2026/09/09 07:00 に解除
+#
 # → 6時間
-# → 朝08:00までに解除
+# → 08:00までに解除
 # → 本社報告対象
 # ============================================================
 
@@ -49,7 +49,7 @@ TEST_RELEASE = datetime(
 
 
 # ============================================================
-# テスト用state
+# テスト用 state
 # ============================================================
 
 TEST_STATE = {
@@ -60,7 +60,9 @@ TEST_STATE = {
             "direction": "上り",
             "section": "盛岡南～水沢",
             "reason": "事故",
+
             "start_time": TEST_START.isoformat(),
+
             "release_detected": TEST_RELEASE.isoformat(),
 
             "matched_facilities": [
@@ -109,7 +111,8 @@ TEST_FACILITIES = [
 
 
 # ============================================================
-# 現在時刻をテスト時刻に差し替え
+# morning_report.py の現在時刻を
+# テスト時刻に差し替える
 # ============================================================
 
 class FakeDateTime(datetime):
@@ -123,29 +126,24 @@ morning_report.datetime = FakeDateTime
 
 
 # ============================================================
-# state.json / facilities.json / settings.json
-# をテストデータに差し替え
+# state.json / facilities.json
+# だけテストデータに差し替える
+#
+# settings.json は実際のファイルを読む！
 # ============================================================
 
 _original_load_json = morning_report.load_json
 
 
 def test_load_json(filename):
+
     if filename == "state.json":
         return TEST_STATE
 
     if filename == "facilities.json":
         return TEST_FACILITIES
 
-    if filename == "settings.json":
-        return {
-            "notification_prefectures": [
-                "青森県",
-                "岩手県",
-                "秋田県",
-            ]
-        }
-
+    # settings.json は実際の settings.json を読む
     return _original_load_json(filename)
 
 
@@ -180,7 +178,7 @@ morning_report.send_ntfy = test_send_ntfy
 
 
 # ============================================================
-# テスト実行
+# 実行
 # ============================================================
 
 print("=" * 60)
@@ -193,7 +191,7 @@ print("通行止開始：2026/09/09 01:00")
 print("通行止解除：2026/09/09 07:00")
 print("経過時間：6時間")
 print()
-print("通知対象都道府県：青森県・岩手県・秋田県")
+print("settings.json の実際の設定を使用します")
 print()
 
 morning_report.main()

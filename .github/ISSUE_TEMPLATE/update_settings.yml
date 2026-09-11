@@ -1,0 +1,21 @@
+name: 監視設定の変更
+description: 監視対象の都道府県をチェックボックスで変更します
+title: "[設定変更] 監視対象の都道府県"
+labels: ["settings-update"]
+body:
+  - type: markdown
+    attributes:
+      value: "チェックを入れた都道府県が自動的に `settings.json` に反映されます。"
+  - type: checkboxes
+    id: prefectures
+    attributes:
+      label: 監視対象の都道府県
+      description: 監視したい都道府県を選択して「Submit new issue」を押してください。
+      options:
+        - 青森県
+        - 岩手県
+        - 秋田県
+        - 宮城県
+        - 山形県
+        - 福島県
+        - 新潟県

@@ -1,0 +1,70 @@
+name: Update Settings from Issue
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  update-settings:
+    if: contains(github.event.issue.labels.*.name, 'settings-update')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - name: リポジトリのチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Issueの内容から settings.json を更新
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          python3 -c '
+          import os, json, re
+
+          body = os.environ.get("ISSUE_BODY", "")
+          matches = re.findall(r"- \[[xX]\]\s+(.+)", body)
+          prefectures = [m.strip() for m in matches]
+
+          settings_file = "settings.json"
+          if os.path.exists(settings_file):
+              with open(settings_file, "r", encoding="utf-8") as f:
+                  try:
+                      settings = json.load(f)
+                  except:
+                      settings = {}
+          else:
+              settings = {}
+
+          settings["prefectures"] = prefectures
+
+          with open(settings_file, "w", encoding="utf-8") as f:
+              json.dump(settings, f, ensure_ascii=False, indent=2)
+          print(f"settings.json を更新しました: {prefectures}")
+          '
+
+      - name: 変更をコミットしてプッシュ
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add settings.json
+          git commit -m "Auto-update settings from Issue #${{ github.event.issue.number }}" || exit 0
+          git push
+
+      - name: Issueを自動クローズ
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "✅ `settings.json` の更新が完了しました！ボットが自動的にこのIssueをクローズします。"
+            })
+            github.rest.issues.update({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "closed"
+            })

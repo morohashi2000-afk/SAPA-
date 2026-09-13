@@ -12,10 +12,10 @@ body:
       label: 監視対象の都道府県
       description: 監視したい都道府県を選択して「Submit new issue」を押してください。
       options:
-        - 青森県
-        - 岩手県
-        - 秋田県
-        - 宮城県
-        - 山形県
-        - 福島県
-        - 新潟県
+        - label: 青森県
+        - label: 岩手県
+        - label: 秋田県
+        - label: 宮城県
+        - label: 山形県
+        - label: 福島県
+        - label: 新潟県

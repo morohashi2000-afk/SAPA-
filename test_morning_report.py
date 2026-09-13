@@ -158,7 +158,7 @@ morning_report.load_json = test_load_json
 _original_send_ntfy = morning_report.send_ntfy
 
 
-def test_send_ntfy(message):
+def test_send_ntfy(message, has_candidates):
 
     print()
     print("=" * 60)
@@ -169,7 +169,7 @@ def test_send_ntfy(message):
 
     print("=" * 60)
 
-    _original_send_ntfy(message)
+    _original_send_ntfy(message, has_candidates)
 
     print("TEST通知送信成功")
 

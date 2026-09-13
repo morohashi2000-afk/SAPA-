@@ -18,11 +18,12 @@ def load_json(filename):
 def load_settings():
     settings = load_json("settings.json")
 
-    prefectures = settings.get("notification_prefectures")
+    # update_settings.yml (Issueフォーム) で保存される "prefectures" に対応
+    prefectures = settings.get("prefectures") or settings.get("notification_prefectures")
 
     if not isinstance(prefectures, list):
         raise RuntimeError(
-            "settings.json の notification_prefectures がリストになっていません。"
+            "settings.json の prefectures がリストになっていません。"
         )
 
     valid_prefectures = {
@@ -54,7 +55,7 @@ def load_settings():
 
     if not prefectures:
         raise RuntimeError(
-            "notification_prefectures が空です。"
+            "監視対象都道府県が空です。"
             "少なくとも1つ都道府県を設定してください。"
         )
 
@@ -126,7 +127,7 @@ def format_duration(hours):
     return f"{h}時間{m}分"
 
 
-def send_ntfy(message):
+def send_ntfy(message, has_candidates):
     topic = os.environ.get("NTFY_TOPIC", "")
 
     if not topic:
@@ -134,11 +135,14 @@ def send_ntfy(message):
 
     url = "https://ntfy.sh"
 
+    # 通知タイトルにも判別用テキストを付与
+    title = "(報告対象アリ) 本社報告確認" if has_candidates else "(報告対象ナシ) 本社報告確認"
+
     payload = {
         "topic": topic,
-        "title": "本社報告確認（08:00）",
+        "title": title,
         "message": message,
-        "priority": 4,
+        "priority": 4 if has_candidates else 3,  # アリの場合は優先度を高く設定
         "tags": ["highway"],
     }
 
@@ -289,8 +293,12 @@ def main():
 
     candidates = list(unique.values())
 
+    # 文頭のタグを設定
+    has_candidates = len(candidates) > 0
+    header_tag = "(報告対象アリ)" if has_candidates else "(報告対象ナシ)"
+
     lines = [
-        "【08:00 本社報告確認】",
+        f"{header_tag} 【08:00 本社報告確認】",
         "",
         f"通知対象都道府県：{'、'.join(sorted(settings))}",
         "",
@@ -375,7 +383,7 @@ def main():
 
     print(message)
 
-    send_ntfy(message)
+    send_ntfy(message, has_candidates)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-name: Morning Report
+Name: Morning Report
 
 on:
   schedule:
@@ -17,29 +17,23 @@ jobs:
       - name: Python環境のセットアップ
         uses: actions/setup-python@v5
         with:
-          python-python-version: '3.x'
+          python-version: '3.x'
 
       - name: 07:50:00 まで待機してから実行
         run: |
-          python3 -c '
+          python3 -c "
           import time
           from datetime import datetime, timezone, timedelta
-
           JST = timezone(timedelta(hours=9))
           now = datetime.now(JST)
-
-          # 今日の 07:50:00 の時刻を作成
           target_time = now.replace(hour=7, minute=50, second=0, microsecond=0)
-
-          # すでに 07:50 を過ぎている場合は待機せずに即実行（手動実行時など）
           if now < target_time:
               wait_seconds = (target_time - now).total_seconds()
-              print(f"現在時刻: {now.strftime(\"%H:%M:%S\")}")
-              print(f"07:50:00 まであと {wait_seconds:.1f} 秒待機します...")
+              print(f'現在時刻: {now.strftime(\"%H:%M:%S\")}')
+              print(f'07:50:00 まであと {wait_seconds:.1f} 秒待機します...')
               time.sleep(wait_seconds)
-
-          print("07:50:00 になりました。朝の報告処理を実行します。")
-          '
+          print('07:50:00 になりました。朝の報告処理を実行します。')
+          "
 
       - name: 朝の本社報告確認を実行
         run: python3 morning_report.py

@@ -3,21 +3,25 @@ import os
 import urllib.request
 import csv
 import io
+import re
 from datetime import datetime, timedelta, timezone
 
 JST = timezone(timedelta(hours=9))
 
-# プランB: スプレッドシートのCSV公開URL
+# スプレッドシートのCSV公開URL
 SHEET_ID = "1SGD4RrHxX7BlbeeRIY1-bL0kC1TbUjqe50OHzBsYdlI"
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=307854761"
 
-# 拠点のプルダウンと対象都道府県の紐付け（※実際のフォームの選択肢に合わせて増減してください）
+# 拠点のプルダウンと対象都道府県の紐付け
 BRANCH_PREFECTURES = {
     "札幌支店": ["北海道"],
+    "東北支店": ["宮城県", "山形県", "福島県"],
     "盛岡支部": ["青森県", "岩手県", "秋田県"],
-    "仙台支店": ["宮城県", "山形県", "福島県"],
-    "関東支店": ["茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県"],
     "新潟支店": ["新潟県", "長野県"],
+    "関東西支店": ["群馬県", "埼玉県", "東京都", "神奈川県"],
+    "宇都宮支部": ["栃木県"], # 茨城県も含む場合は追加してください
+    "長野支部": ["長野県"],
+    "関東東支店": ["茨城県", "千葉県"],
     "全拠点": [
         "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
         "茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県",
@@ -25,15 +29,16 @@ BRANCH_PREFECTURES = {
     ]
 }
 
+def clean_text(text):
+    """フォームの選択肢にある '1. ' などのプレフィックスを取り除く"""
+    return re.sub(r'^\d+\.\s*', '', text).strip()
 
 def now_jst():
     return datetime.now(JST)
 
-
 def load_json(filename):
     with open(filename, "r", encoding="utf-8") as f:
         return json.load(f)
-
 
 def get_subscribers():
     """スプレッドシートから配信先リストを取得する"""
@@ -47,19 +52,17 @@ def get_subscribers():
         next(reader, None)  # 1行目（ヘッダー）をスキップ
 
         for row in reader:
-            # フォームの列順: [0:タイムスタンプ, 1:名前, 2:拠点, 3:時間(HH:MM), 4:トピック]
-            if len(row) >= 5:
+            # フォームの列順: [0:タイムスタンプ, 1:拠点, 2:時間, 3:トピック]
+            if len(row) >= 4:
                 subscribers.append({
-                    "name": row[1].strip(),
-                    "branch": row[2].strip(),
-                    "time": row[3].strip(),
-                    "topic": row[4].strip(),
+                    "branch": clean_text(row[1]),
+                    "time": clean_text(row[2]),
+                    "topic": clean_text(row[3]),
                 })
         return subscribers
     except Exception as e:
         print(f"スプレッドシートの読み込みエラー: {e}")
         return []
-
 
 def parse_datetime(value):
     if not value:
@@ -80,7 +83,6 @@ def parse_datetime(value):
             continue
     return None
 
-
 def duration_hours(start, end):
     if not start or not end:
         return None
@@ -89,12 +91,10 @@ def duration_hours(start, end):
         return None
     return seconds / 3600
 
-
 def format_dt(dt):
     if not dt:
         return "不明"
     return dt.strftime("%Y/%m/%d %H:%M")
-
 
 def format_duration(hours):
     if hours is None:
@@ -106,13 +106,11 @@ def format_duration(hours):
         return f"{h}時間"
     return f"{h}時間{m}分"
 
-
 def facility_matches_prefecture(facility, target_prefectures):
     return (
         facility.get("staffed") is True
         and facility.get("prefecture") in target_prefectures
     )
-
 
 def send_ntfy(topic, message, has_candidates):
     if not topic:
@@ -135,7 +133,6 @@ def send_ntfy(topic, message, has_candidates):
             pass
     except Exception as e:
         print(f"ntfy通知失敗 ({topic}): {e}")
-
 
 def main():
     now = now_jst()
@@ -169,15 +166,15 @@ def main():
         target_minutes = t_hour * 60 + t_min
         now_minutes = now.hour * 60 + now.minute
         if not (0 <= (now_minutes - target_minutes) <= 15):
-            print(f"スキップ: {sub['name']}さん (希望 {target_time_str} / 現在 {now.strftime('%H:%M')})")
+            print(f"スキップ: {sub['branch']} ({sub['topic']}) (希望 {target_time_str} / 現在 {now.strftime('%H:%M')})")
             continue
 
         target_prefectures = BRANCH_PREFECTURES.get(sub["branch"], [])
         if not target_prefectures:
-            print(f"未定義の拠点: {sub['branch']} ({sub['name']}さん)")
+            print(f"未定義の拠点: {sub['branch']}")
             continue
 
-        # 個人ごとの判定基準時間をセット（前日17:30 ～ 各個人の通知希望時間）
+        # 判定基準時間をセット（前日17:30 ～ 各拠点の通知希望時間）
         report_end = now.replace(hour=t_hour, minute=t_min, second=0, microsecond=0)
         report_start = report_end.replace(hour=17, minute=30) - timedelta(days=1)
 
@@ -209,7 +206,6 @@ def main():
                 if hours is not None and hours >= 6:
                     candidates.append({"item": item, "facilities": matched_facilities, "start": start, "release": release, "hours": hours})
 
-        # 重複除去
         unique = {}
         for candidate in candidates:
             item = candidate["item"]
@@ -221,7 +217,7 @@ def main():
         header_tag = "(報告対象アリ)" if has_candidates else "(報告対象ナシ)"
         lines = [
             f"{header_tag} 【{target_time_str} 本社報告確認】",
-            f"宛先：{sub['name']} 様 ({sub['branch']})",
+            f"対象拠点：{sub['branch']}",
             "",
         ]
 
@@ -256,9 +252,8 @@ def main():
                 ])
 
         message = "\n".join(lines)
-        print(f"送信中: {sub['name']}さん -> トピック: {sub['topic']}")
+        print(f"送信中: {sub['branch']} -> トピック: {sub['topic']}")
         send_ntfy(sub["topic"], message, has_candidates)
-
 
 if __name__ == "__main__":
     main()

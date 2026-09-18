@@ -162,12 +162,15 @@ def main():
         except ValueError:
             continue
         
-        # GitHub Actionsの実行遅延を考慮し、設定時刻から15分以内なら処理を実行する
+                # 手動実行（workflow_dispatch）のときは時間のズレを無視して強制実行する
+        is_manual_run = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+        
         target_minutes = t_hour * 60 + t_min
         now_minutes = now.hour * 60 + now.minute
-        if not (0 <= (now_minutes - target_minutes) <= 15):
+        if not is_manual_run and not (0 <= (now_minutes - target_minutes) <= 15):
             print(f"スキップ: {sub['branch']} ({sub['topic']}) (希望 {target_time_str} / 現在 {now.strftime('%H:%M')})")
             continue
+
 
         target_prefectures = BRANCH_PREFECTURES.get(sub["branch"], [])
         if not target_prefectures:

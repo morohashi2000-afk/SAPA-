@@ -1,9 +1,29 @@
 import json
 import os
 import urllib.request
+import csv
+import io
 from datetime import datetime, timedelta, timezone
 
 JST = timezone(timedelta(hours=9))
+
+# プランB: スプレッドシートのCSV公開URL
+SHEET_ID = "1SGD4RrHxX7BlbeeRIY1-bL0kC1TbUjqe50OHzBsYdlI"
+CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=307854761"
+
+# 拠点のプルダウンと対象都道府県の紐付け（※実際のフォームの選択肢に合わせて増減してください）
+BRANCH_PREFECTURES = {
+    "札幌支店": ["北海道"],
+    "盛岡支部": ["青森県", "岩手県", "秋田県"],
+    "仙台支店": ["宮城県", "山形県", "福島県"],
+    "関東支店": ["茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県"],
+    "新潟支店": ["新潟県", "長野県"],
+    "全拠点": [
+        "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
+        "茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県",
+        "新潟県", "長野県"
+    ]
+}
 
 
 def now_jst():
@@ -15,60 +35,36 @@ def load_json(filename):
         return json.load(f)
 
 
-def load_settings():
-    settings = load_json("settings.json")
+def get_subscribers():
+    """スプレッドシートから配信先リストを取得する"""
+    subscribers = []
+    try:
+        req = urllib.request.Request(CSV_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as response:
+            csv_data = response.read().decode("utf-8")
 
-    # update_settings.yml (Issueフォーム) で保存される "prefectures" に対応
-    prefectures = settings.get("prefectures") or settings.get("notification_prefectures")
+        reader = csv.reader(io.StringIO(csv_data))
+        next(reader, None)  # 1行目（ヘッダー）をスキップ
 
-    if not isinstance(prefectures, list):
-        raise RuntimeError(
-            "settings.json の prefectures がリストになっていません。"
-        )
-
-    valid_prefectures = {
-        "北海道",
-        "青森県",
-        "岩手県",
-        "宮城県",
-        "秋田県",
-        "山形県",
-        "福島県",
-        "茨城県",
-        "栃木県",
-        "群馬県",
-        "埼玉県",
-        "千葉県",
-        "東京都",
-        "神奈川県",
-        "新潟県",
-        "長野県",
-    }
-
-    invalid = [p for p in prefectures if p not in valid_prefectures]
-
-    if invalid:
-        raise RuntimeError(
-            "settings.json に不正な都道府県があります: "
-            + ", ".join(invalid)
-        )
-
-    if not prefectures:
-        raise RuntimeError(
-            "監視対象都道府県が空です。"
-            "少なくとも1つ都道府県を設定してください。"
-        )
-
-    return set(prefectures)
+        for row in reader:
+            # フォームの列順: [0:タイムスタンプ, 1:名前, 2:拠点, 3:時間(HH:MM), 4:トピック]
+            if len(row) >= 5:
+                subscribers.append({
+                    "name": row[1].strip(),
+                    "branch": row[2].strip(),
+                    "time": row[3].strip(),
+                    "topic": row[4].strip(),
+                })
+        return subscribers
+    except Exception as e:
+        print(f"スプレッドシートの読み込みエラー: {e}")
+        return []
 
 
 def parse_datetime(value):
     if not value:
         return None
-
     value = value.strip()
-
-    # ISO形式
     try:
         dt = datetime.fromisoformat(value)
         if dt.tzinfo is None:
@@ -76,92 +72,39 @@ def parse_datetime(value):
         return dt.astimezone(JST)
     except ValueError:
         pass
-
-    # よくあるNEXCO表記
-    formats = [
-        "%Y/%m/%d %H:%M",
-        "%Y/%m/%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d %H:%M:%S",
-    ]
-
+    formats = ["%Y/%m/%d %H:%M", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"]
     for fmt in formats:
         try:
             return datetime.strptime(value, fmt).replace(tzinfo=JST)
         except ValueError:
             continue
-
     return None
 
 
 def duration_hours(start, end):
     if not start or not end:
         return None
-
     seconds = (end - start).total_seconds()
-
     if seconds < 0:
         return None
-
     return seconds / 3600
 
 
 def format_dt(dt):
     if not dt:
         return "不明"
-
     return dt.strftime("%Y/%m/%d %H:%M")
 
 
 def format_duration(hours):
     if hours is None:
         return "不明"
-
     total_minutes = round(hours * 60)
     h = total_minutes // 60
     m = total_minutes % 60
-
     if m == 0:
         return f"{h}時間"
-
     return f"{h}時間{m}分"
-
-
-def send_ntfy(message, has_candidates):
-    topic = os.environ.get("NTFY_TOPIC", "")
-
-    if not topic:
-        raise RuntimeError("NTFY_TOPIC が設定されていません。")
-
-    url = "https://ntfy.sh"
-
-    # 通知タイトルにも判別用テキストを付与
-    title = "(報告対象アリ) 本社報告確認" if has_candidates else "(報告対象ナシ) 本社報告確認"
-
-    payload = {
-        "topic": topic,
-        "title": title,
-        "message": message,
-        "priority": 4 if has_candidates else 3,  # アリの場合は優先度を高く設定
-        "tags": ["highway"],
-    }
-
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-
-    request = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "Content-Type": "application/json; charset=utf-8"
-        },
-        method="POST",
-    )
-
-    with urllib.request.urlopen(request, timeout=30) as response:
-        if response.status < 200 or response.status >= 300:
-            raise RuntimeError(
-                f"ntfy通知失敗: HTTP {response.status}"
-            )
 
 
 def facility_matches_prefecture(facility, target_prefectures):
@@ -171,23 +114,40 @@ def facility_matches_prefecture(facility, target_prefectures):
     )
 
 
-def get_release_time(item):
-    """
-    現時点では release_detected を使用。
-    これは監視側が「通行止め一覧から消えた」と確認した時刻であり、
-    NEXCO公式の実解除時刻そのものではない。
-    """
-    return parse_datetime(item.get("release_detected"))
+def send_ntfy(topic, message, has_candidates):
+    if not topic:
+        return
+    url = f"https://ntfy.sh/{topic}"
+    title = "(報告対象アリ) 本社報告確認" if has_candidates else "(報告対象ナシ) 本社報告確認"
+    payload = {
+        "topic": topic,
+        "title": title,
+        "message": message,
+        "priority": 4 if has_candidates else 3,
+        "tags": ["highway"],
+    }
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        url, data=data, headers={"Content-Type": "application/json; charset=utf-8"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            pass
+    except Exception as e:
+        print(f"ntfy通知失敗 ({topic}): {e}")
 
 
 def main():
     now = now_jst()
+    subscribers = get_subscribers()
 
-    settings = load_settings()
+    if not subscribers:
+        print("有効な購読者がいません。")
+        return
+
     state = load_json("state.json")
     facilities = load_json("facilities.json")
 
-    # state.json が旧形式のリストの場合にも対応
     if isinstance(state, list):
         state_items = state
     elif isinstance(state, dict):
@@ -195,195 +155,109 @@ def main():
     else:
         raise RuntimeError("state.json の形式が不正です。")
 
-    # 前日17:30 ～ 当日08:00
-    report_start = now.replace(
-        hour=17,
-        minute=30,
-        second=0,
-        microsecond=0,
-    ) - timedelta(days=1)
+    for sub in subscribers:
+        target_time_str = sub.get("time", "")
+        if not target_time_str:
+            continue
+        
+        try:
+            t_hour, t_min = map(int, target_time_str.split(":"))
+        except ValueError:
+            continue
+        
+        # GitHub Actionsの実行遅延を考慮し、設定時刻から15分以内なら処理を実行する
+        target_minutes = t_hour * 60 + t_min
+        now_minutes = now.hour * 60 + now.minute
+        if not (0 <= (now_minutes - target_minutes) <= 15):
+            print(f"スキップ: {sub['name']}さん (希望 {target_time_str} / 現在 {now.strftime('%H:%M')})")
+            continue
 
-    report_end = now.replace(
-        hour=8,
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
+        target_prefectures = BRANCH_PREFECTURES.get(sub["branch"], [])
+        if not target_prefectures:
+            print(f"未定義の拠点: {sub['branch']} ({sub['name']}さん)")
+            continue
 
-    candidates = []
+        # 個人ごとの判定基準時間をセット（前日17:30 ～ 各個人の通知希望時間）
+        report_end = now.replace(hour=t_hour, minute=t_min, second=0, microsecond=0)
+        report_start = report_end.replace(hour=17, minute=30) - timedelta(days=1)
 
-    for item in state_items:
-        matched_facilities = []
+        candidates = []
+        for item in state_items:
+            matched_facilities = []
+            for facility in facilities:
+                if facility_matches_prefecture(facility, target_prefectures):
+                    if facility.get("name") in item.get("matched_facilities", []):
+                        matched_facilities.append(facility)
 
-        for facility in facilities:
-            if not facility_matches_prefecture(
-                facility,
-                settings,
-            ):
+            if not matched_facilities:
                 continue
 
-            matched_names = item.get("matched_facilities", [])
+            start = parse_datetime(item.get("start_time") or item.get("closure_start"))
+            if not start:
+                continue
 
-            if facility.get("name") in matched_names:
-                matched_facilities.append(facility)
+            release = parse_datetime(item.get("release_detected"))
 
-        if not matched_facilities:
-            continue
+            if release is None:
+                hours = duration_hours(start, now)
+                if hours is not None and hours >= 6:
+                    candidates.append({"item": item, "facilities": matched_facilities, "start": start, "release": None, "hours": hours})
+                continue
 
-        start = parse_datetime(
-            item.get("start_time")
-            or item.get("closure_start")
-        )
+            if report_start <= release <= report_end:
+                hours = duration_hours(start, release)
+                if hours is not None and hours >= 6:
+                    candidates.append({"item": item, "facilities": matched_facilities, "start": start, "release": release, "hours": hours})
 
-        if not start:
-            continue
-
-        release = get_release_time(item)
-
-        # 現在も通行止め中
-        if release is None:
-            hours = duration_hours(start, now)
-
-            if hours is not None and hours >= 6:
-                candidates.append(
-                    {
-                        "item": item,
-                        "facilities": matched_facilities,
-                        "start": start,
-                        "release": None,
-                        "hours": hours,
-                    }
-                )
-
-            continue
-
-        # 08:00時点までに解除されたもの
-        # かつ、解除時刻が前日17:30～当日08:00
-        if report_start <= release <= report_end:
-            hours = duration_hours(start, release)
-
-            if hours is not None and hours >= 6:
-                candidates.append(
-                    {
-                        "item": item,
-                        "facilities": matched_facilities,
-                        "start": start,
-                        "release": release,
-                        "hours": hours,
-                    }
-                )
-
-    # 重複除去
-    unique = {}
-
-    for candidate in candidates:
-        item = candidate["item"]
-
-        key = (
-            item.get("id")
-            or item.get("closure_id")
-            or (
-                item.get("route"),
-                item.get("section"),
-                item.get("start_time"),
-            )
-        )
-
-        unique[key] = candidate
-
-    candidates = list(unique.values())
-
-    # 文頭のタグを設定
-    has_candidates = len(candidates) > 0
-    header_tag = "(報告対象アリ)" if has_candidates else "(報告対象ナシ)"
-
-    lines = [
-        f"{header_tag} 【08:00 本社報告確認】",
-        "",
-        f"通知対象都道府県：{'、'.join(sorted(settings))}",
-        "",
-    ]
-
-    if not candidates:
-        lines.append("本社報告対象の通行止めはありません。")
-
-    else:
-        lines.append(
-            f"本社報告対象：{len(candidates)}件"
-        )
-        lines.append("")
-
-        for i, candidate in enumerate(candidates, 1):
+        # 重複除去
+        unique = {}
+        for candidate in candidates:
             item = candidate["item"]
-            facilities_matched = candidate["facilities"]
+            key = item.get("id") or item.get("closure_id") or (item.get("route"), item.get("section"), item.get("start_time"))
+            unique[key] = candidate
+        candidates = list(unique.values())
 
-            route = (
-                item.get("route")
-                or item.get("road")
-                or "不明"
-            )
+        has_candidates = len(candidates) > 0
+        header_tag = "(報告対象アリ)" if has_candidates else "(報告対象ナシ)"
+        lines = [
+            f"{header_tag} 【{target_time_str} 本社報告確認】",
+            f"宛先：{sub['name']} 様 ({sub['branch']})",
+            "",
+        ]
 
-            direction = item.get("direction") or "不明"
+        if not candidates:
+            lines.append("本社報告対象の通行止めはありません。")
+        else:
+            lines.append(f"本社報告対象：{len(candidates)}件\n")
+            for i, candidate in enumerate(candidates, 1):
+                item = candidate["item"]
+                route = item.get("route") or item.get("road") or "不明"
+                direction = item.get("direction") or "不明"
+                section = item.get("section") or item.get("区間") or "不明"
+                reason = item.get("reason") or item.get("cause") or item.get("理由") or "不明"
+                
+                facilities_matched = candidate["facilities"]
+                prefectures = sorted({f.get("prefecture") for f in facilities_matched if f.get("prefecture")})
+                facility_names = [f.get("name") for f in facilities_matched]
 
-            section = (
-                item.get("section")
-                or item.get("区間")
-                or "不明"
-            )
+                lines.extend([
+                    f"【{i}】",
+                    f"都道府県：{'、'.join(prefectures)}",
+                    f"路線：{route}",
+                    f"方向：{direction}",
+                    f"区間：{section}",
+                    f"通行止開始：{format_dt(candidate['start'])}",
+                    f"解除確認：{format_dt(candidate['release']) if candidate['release'] else '未解除'}",
+                    f"通行止め時間：{format_duration(candidate['hours'])}",
+                    f"原因：{reason}",
+                    f"対象SAPA：{'、'.join(facility_names)}",
+                    "→ 本社報告対象",
+                    ""
+                ])
 
-            reason = (
-                item.get("reason")
-                or item.get("cause")
-                or item.get("理由")
-                or "不明"
-            )
-
-            prefectures = sorted(
-                {
-                    f.get("prefecture")
-                    for f in facilities_matched
-                    if f.get("prefecture")
-                }
-            )
-
-            facility_names = [
-                f.get("name")
-                for f in facilities_matched
-            ]
-
-            lines.append(f"【{i}】")
-            lines.append(
-                f"都道府県：{'、'.join(prefectures)}"
-            )
-            lines.append(f"路線：{route}")
-            lines.append(f"方向：{direction}")
-            lines.append(f"区間：{section}")
-            lines.append(
-                f"通行止開始：{format_dt(candidate['start'])}"
-            )
-
-            if candidate["release"]:
-                lines.append(
-                    f"解除確認：{format_dt(candidate['release'])}"
-                )
-            else:
-                lines.append("解除確認：未解除")
-
-            lines.append(
-                f"通行止め時間：{format_duration(candidate['hours'])}"
-            )
-            lines.append(f"原因：{reason}")
-            lines.append(
-                f"対象SAPA：{'、'.join(facility_names)}"
-            )
-            lines.append("→ 本社報告対象")
-            lines.append("")
-
-    message = "\n".join(lines)
-
-    print(message)
-
-    send_ntfy(message, has_candidates)
+        message = "\n".join(lines)
+        print(f"送信中: {sub['name']}さん -> トピック: {sub['topic']}")
+        send_ntfy(sub["topic"], message, has_candidates)
 
 
 if __name__ == "__main__":

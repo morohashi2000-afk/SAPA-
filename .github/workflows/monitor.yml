@@ -1,33 +1,23 @@
-name: SAPA通行止め監視
-
+name: Disaster and Traffic Monitor
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: '*/5 * * * *'
   workflow_dispatch:
-
-permissions:
-  contents: write
-
 jobs:
   monitor:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
     steps:
-      - name: リポジトリを取得
-        uses: actions/checkout@v4
-
-      - name: Pythonをセットアップ
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
         with:
-          python-version: "3.12"
-
-      - name: 通行止め監視を実行
-        run: python monitor.py
-
-      - name: 状態を保存
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python-version: '3.10'
+      - run: python monitor.py
+        env:
+          TZ: 'Asia/Tokyo'
+      - run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add state.json
-          git diff --cached --quiet || git commit -m "Update monitoring state"
-          git push
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update state.json" && git push)

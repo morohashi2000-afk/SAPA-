@@ -6,26 +6,11 @@ import re
 from datetime import datetime, timedelta, timezone
 
 JST = timezone(timedelta(hours=9), 'JST')
-# ↓ スプレッドシートのURLはすでに設定いただいたものが入ります
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1SGD4RrHxX7BlbeeRIY1-bL0kC1TbUjqe50OHzBsYdlI/export?format=csv&gid=307854761"
 
-# 新しい通知履歴の保存先（旧 state.json との競合を回避）
 HISTORY_FILE = "notify_history.json"
-# 通行止めデータとSAPAデータの読み込み元
 CLOSURES_FILE = "state.json"
 FACILITIES_FILE = "facilities.json"
-
-# 管轄拠点の定義（旧コードから引き継ぎ）
-BRANCH_PREFECTURES = {
-    "札幌支店": ["北海道"],
-    "東北支店": ["宮城県", "山形県", "福島県"],
-    "盛岡支部": ["青森県", "岩手県", "秋田県"],
-    "新潟支店": ["新潟県", "長野県"],
-    "関東西支店": ["群馬県", "埼玉県", "東京都", "神奈川県"],
-    "宇都宮支部": ["栃木県"],
-    "長野支部": ["長野県"],
-    "関東東支店": ["茨城県", "千葉県"]
-}
 
 TARGET_MUNICIPALITIES = [
     "砂川市", "岩見沢市", "江別市", "北広島市", "苫小牧市", "伊達市", "札幌市手稲区",
@@ -46,6 +31,25 @@ SPECIAL_PAS = {
     "寄居PA": {"up": "寄居町", "down": "深谷市"},
     "保土ヶ谷PA": {"up": "横浜市神奈川区", "down": "横浜市保土ケ谷区"}
 }
+
+def get_branches_for_facility(fac_name, prefecture):
+    """施設名や都道府県から担当拠点を判定する（例外ルール対応）"""
+    # 1. 特定PA/SAの例外ルール
+    if fac_name == "坂東PA": return ["関東西支店"]
+    if fac_name == "横川SA": return ["長野支部"]
+    if fac_name == "谷川岳PA": return ["新潟支店"]
+    
+    # 2. 都道府県ベースの基本ルール
+    if prefecture == "北海道": return ["札幌支店"]
+    if prefecture in ["宮城県", "福島県", "山形県"]: return ["東北支店"]
+    if prefecture in ["青森県", "岩手県", "秋田県"]: return ["盛岡支部"]
+    if prefecture in ["新潟県", "富山県"]: return ["新潟支店"]
+    if prefecture == "栃木県": return ["宇都宮支部"]
+    if prefecture == "長野県": return ["長野支部"]
+    if prefecture in ["群馬県", "埼玉県"]: return ["関東西支店"]
+    if prefecture in ["茨城県", "千葉県", "東京都", "神奈川県"]: return ["関東東支店"]
+    
+    return []
 
 def load_json(filename):
     if os.path.exists(filename):
@@ -163,9 +167,13 @@ def fetch_road_closures():
         matched_facility_names = item.get("matched_facilities", [])
         if not matched_facility_names: continue
 
-        affected_prefectures = {fac.get("prefecture") for fac in facilities 
-                                if fac.get("staffed") and fac.get("name") in matched_facility_names}
-        if not affected_prefectures: continue
+        matched_fac_details = [fac for fac in facilities if fac.get("staffed") and fac.get("name") in matched_facility_names]
+        
+        affected_branches = set()
+        for fac in matched_fac_details:
+            affected_branches.update(get_branches_for_facility(fac.get("name"), fac.get("prefecture")))
+            
+        if not affected_branches: continue
 
         start = parse_datetime(item.get("start_time") or item.get("closure_start"))
         release = parse_datetime(item.get("release_detected"))
@@ -174,10 +182,14 @@ def fetch_road_closures():
         status = "resolved" if release else "closed"
         c_id = item.get("id") or item.get("closure_id") or f"{item.get('route')}_{item.get('section')}_{start.timestamp()}"
 
-        affected_branches = [b for b, prefs in BRANCH_PREFECTURES.items() if any(p in prefs for p in affected_prefectures)]
-
         for branch in affected_branches:
-            fac_names = [fac.get("name") for fac in facilities if fac.get("name") in matched_facility_names and fac.get("prefecture") in BRANCH_PREFECTURES.get(branch, [])]
+            fac_names = []
+            for fac in matched_fac_details:
+                if branch in get_branches_for_facility(fac.get("name"), fac.get("prefecture")):
+                    fac_names.append(fac.get("name"))
+            
+            if not fac_names: continue
+            
             closures.append({
                 "id": str(c_id),
                 "start": start,
@@ -217,8 +229,8 @@ def check_road_closures(state, config):
         
         should_notify = False
         report_type = ""
-        notified_key_morning = f"{c_id}_morning"
-        notified_key_instant = f"{c_id}_instant"
+        notified_key_morning = f"{c_id}_{branch_name}_morning"
+        notified_key_instant = f"{c_id}_{branch_name}_instant"
         
         if current_time_str == scheduled_time and notified_key_morning not in state["notified_closures"]:
             if status == "closed" or (status == "resolved" and end_time.time() <= datetime.strptime(scheduled_time, "%H:%M").time()):

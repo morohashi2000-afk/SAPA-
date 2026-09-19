@@ -6,7 +6,12 @@ from datetime import datetime, timedelta, timezone
 
 JST = timezone(timedelta(hours=9), 'JST')
 # 実際のスプレッドシートURLを設定してください
+# 変更前
 SPREADSHEET_URL = "YOUR_SPREADSHEET_URL_HERE"
+
+# 変更後（↓これをコピペしてください）
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1SGD4RrHxX7BlbeeRIY1-bL0kC1TbUjqe50OHzBsYdlI/export?format=csv&gid=307854761"
+
 STATE_FILE = "state.json"
 
 # 有人拠点が存在する市町村のリスト（全件精査済み・管轄外除外済み・文字化け修正済み）

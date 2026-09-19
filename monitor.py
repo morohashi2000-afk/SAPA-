@@ -2,33 +2,42 @@ import os
 import json
 import csv
 import urllib.request
+import re
 from datetime import datetime, timedelta, timezone
 
 JST = timezone(timedelta(hours=9), 'JST')
-# 実際のスプレッドシートURLを設定してください
-# 変更前
-SPREADSHEET_URL = "YOUR_SPREADSHEET_URL_HERE"
-
-# 変更後（↓これをコピペしてください）
+# ↓ スプレッドシートのURLはすでに設定いただいたものが入ります
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1SGD4RrHxX7BlbeeRIY1-bL0kC1TbUjqe50OHzBsYdlI/export?format=csv&gid=307854761"
 
-STATE_FILE = "state.json"
+# 新しい通知履歴の保存先（旧 state.json との競合を回避）
+HISTORY_FILE = "notify_history.json"
+# 通行止めデータとSAPAデータの読み込み元
+CLOSURES_FILE = "state.json"
+FACILITIES_FILE = "facilities.json"
 
-# 有人拠点が存在する市町村のリスト（全件精査済み・管轄外除外済み・文字化け修正済み）
+# 管轄拠点の定義（旧コードから引き継ぎ）
+BRANCH_PREFECTURES = {
+    "札幌支店": ["北海道"],
+    "東北支店": ["宮城県", "山形県", "福島県"],
+    "盛岡支部": ["青森県", "岩手県", "秋田県"],
+    "新潟支店": ["新潟県", "長野県"],
+    "関東西支店": ["群馬県", "埼玉県", "東京都", "神奈川県"],
+    "宇都宮支部": ["栃木県"],
+    "長野支部": ["長野県"],
+    "関東東支店": ["茨城県", "千葉県"]
+}
+
 TARGET_MUNICIPALITIES = [
-    # 北海道・東北
     "砂川市", "岩見沢市", "江別市", "北広島市", "苫小牧市", "伊達市", "札幌市手稲区",
     "平川市", "鹿角市", "軽米町", "大仙市", "八幡平市", "滝沢市", "矢巾町", "紫波町", "北上市", "西和賀町", "奥州市",
     "栗原市", "大崎市", "大和町", "村田町", "川崎町", "寒河江市", "鶴岡市",
     "国見町", "福島市", "本宮市", "郡山市", "鏡石町", "田村市", "磐梯町", "南相馬市", "いわき市",
-    # 関東
     "北茨城市", "日立市", "東海村", "笠間市", "小美玉市", "かすみがうら市", "つくば市", "守谷市", "坂東市",
     "那須塩原市", "那須町", "宇都宮市", "矢板市", "栃木市", "佐野市",
     "羽生市", "蓮田市", "三郷市", "和光市", "三芳町", "東松山市", "嵐山町", "寄居町", "深谷市", "上里町", "狭山市", "久喜市",
     "吉岡町", "昭和村", "みなかみ町", "安中市", "甘楽町", "太田市", "伊勢崎市",
     "横浜市港北区", "横浜市保土ケ谷区", "横浜市神奈川区", "横浜市戸塚区", "横須賀市",
     "市川市", "千葉市花見川区", "千葉市若葉区", "市原市", "千葉市美浜区", "酒々井町", "成田市",
-    # 信越・北陸
     "阿賀町", "南魚沼市", "小千谷市", "長岡市", "妙高市", "糸魚川市", "上越市", "柏崎市", "三条市", "新潟市西区",
     "東御市", "佐久市", "坂城町", "長野市", "小布施町", "千曲市", "朝日町"
 ]
@@ -38,36 +47,49 @@ SPECIAL_PAS = {
     "保土ヶ谷PA": {"up": "横浜市神奈川区", "down": "横浜市保土ケ谷区"}
 }
 
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
+def load_json(filename):
+    if os.path.exists(filename):
+        with open(filename, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"notified_closures": [], "notified_earthquakes": []}
+    return {}
+
+def load_state():
+    state = load_json(HISTORY_FILE)
+    if not isinstance(state, dict):
+        return {"notified_closures": [], "notified_earthquakes": []}
+    return state.get("notified_closures") and state or {"notified_closures": [], "notified_earthquakes": []}
 
 def save_state(state):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 def send_teams_webhook(webhook_url, title, text):
     if not webhook_url: return
     payload = {"title": title, "text": text}
     req = urllib.request.Request(webhook_url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
-    try: 
-        urllib.request.urlopen(req)
-        print(f"Teams送信完了: {title}")
-    except Exception as e: 
-        print(f"Teams送信エラー: {e}")
+    try: urllib.request.urlopen(req)
+    except Exception as e: print(f"Teams送信エラー: {e}")
 
 def scale_to_shindo(scale):
     mapping = {10: "1", 20: "2", 30: "3", 40: "4", 45: "5弱", 50: "5強", 55: "6弱", 60: "6強", 70: "7"}
     return mapping.get(scale, "不明")
 
+def parse_datetime(value):
+    if not value: return None
+    value = value.strip()
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None: dt = dt.replace(tzinfo=JST)
+        return dt.astimezone(JST)
+    except ValueError: pass
+    formats = ["%Y/%m/%d %H:%M", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"]
+    for fmt in formats:
+        try: return datetime.strptime(value, fmt).replace(tzinfo=JST)
+        except ValueError: continue
+    return None
+
 def get_config_from_spreadsheet():
-    """スプレッドシート(CSV形式)からWebhookと時間設定を取得"""
     config = []
-    if SPREADSHEET_URL == "YOUR_SPREADSHEET_URL_HERE":
-        return config
-        
     try:
         req = urllib.request.Request(SPREADSHEET_URL)
         with urllib.request.urlopen(req) as res:
@@ -75,12 +97,11 @@ def get_config_from_spreadsheet():
             reader = csv.DictReader(content)
             for row in reader:
                 config.append({
-                    "branch": row.get("担当拠点", ""),
-                    "time": row.get("送信時間", ""),
-                    "webhook": row.get("Teams Webhook URL", "")
+                    "branch": re.sub(r'^\d+\.\s*', '', row.get("担当拠点", "")).strip(),
+                    "time": row.get("送信時間", "").strip(),
+                    "webhook": row.get("Teams Webhook URL", "").strip()
                 })
-    except Exception as e:
-        print(f"スプレッドシート取得エラー: {e}")
+    except Exception as e: print(f"スプレッドシート取得エラー: {e}")
     return config
 
 def check_earthquakes(state, config):
@@ -103,18 +124,14 @@ def check_earthquakes(state, config):
                 for pa_name, dirs in SPECIAL_PAS.items():
                     up_muni = dirs["up"]
                     down_muni = dirs["down"]
-                    has_up = up_muni in hit_muni
-                    has_down = down_muni in hit_muni
-                    
-                    if has_up and has_down:
+                    if up_muni in hit_muni and down_muni in hit_muni:
                         max_scale = max(hit_muni[up_muni], hit_muni[down_muni])
                         hit_areas.append(f"・{pa_name} (震度{scale_to_shindo(max_scale)})")
-                        del hit_muni[up_muni]
-                        del hit_muni[down_muni]
-                    elif has_up:
+                        del hit_muni[up_muni], hit_muni[down_muni]
+                    elif up_muni in hit_muni:
                         hit_areas.append(f"・{pa_name}(上り線) (震度{scale_to_shindo(hit_muni[up_muni])})\n　※下り線は市町村が異なるほか、震度が3以下であったため対象外")
                         del hit_muni[up_muni]
-                    elif has_down:
+                    elif down_muni in hit_muni:
                         hit_areas.append(f"・{pa_name}(下り線) (震度{scale_to_shindo(hit_muni[down_muni])})\n　※上り線は市町村が異なるほか、震度が3以下であったため対象外")
                         del hit_muni[down_muni]
                 
@@ -131,30 +148,53 @@ def check_earthquakes(state, config):
                 
                 state["notified_earthquakes"].append(quake_id)
             state["notified_earthquakes"] = state["notified_earthquakes"][-100:]
-    except Exception as e:
-        print(f"地震取得エラー: {e}")
+    except Exception as e: print(f"地震取得エラー: {e}")
 
 def fetch_road_closures():
-    """
-    通行止め情報（JSON等）を取得し、共通フォーマットの辞書リストで返す。
-    ※ 実際の運用環境のURL・仕様に合わせて実装してください。
-    """
-    # 戻り値の形式例:
-    # return [
-    #     {
-    #         "id": "event_001",
-    #         "start": datetime(2023, 10, 1, 10, 0, tzinfo=JST),
-    #         "end": None, # 未解除の場合はNone
-    #         "status": "closed", # 継続中は"closed"、解除済みは"resolved"
-    #         "branch": "盛岡支部"
-    #     }
-    # ]
-    return []
+    state_data = load_json(CLOSURES_FILE)
+    facilities = load_json(FACILITIES_FILE)
+    
+    if not state_data or not facilities: return []
+    
+    state_items = state_data if isinstance(state_data, list) else state_data.get("closures", [])
+    closures = []
+    
+    for item in state_items:
+        matched_facility_names = item.get("matched_facilities", [])
+        if not matched_facility_names: continue
+
+        affected_prefectures = {fac.get("prefecture") for fac in facilities 
+                                if fac.get("staffed") and fac.get("name") in matched_facility_names}
+        if not affected_prefectures: continue
+
+        start = parse_datetime(item.get("start_time") or item.get("closure_start"))
+        release = parse_datetime(item.get("release_detected"))
+        if not start: continue
+
+        status = "resolved" if release else "closed"
+        c_id = item.get("id") or item.get("closure_id") or f"{item.get('route')}_{item.get('section')}_{start.timestamp()}"
+
+        affected_branches = [b for b, prefs in BRANCH_PREFECTURES.items() if any(p in prefs for p in affected_prefectures)]
+
+        for branch in affected_branches:
+            fac_names = [fac.get("name") for fac in facilities if fac.get("name") in matched_facility_names and fac.get("prefecture") in BRANCH_PREFECTURES.get(branch, [])]
+            closures.append({
+                "id": str(c_id),
+                "start": start,
+                "end": release,
+                "status": status,
+                "branch": branch,
+                "route": item.get("route") or item.get("road") or "不明",
+                "direction": item.get("direction") or "不明",
+                "section": item.get("section") or item.get("区間") or "不明",
+                "reason": item.get("reason") or item.get("cause") or item.get("理由") or "不明",
+                "facilities": fac_names
+            })
+    return closures
 
 def check_road_closures(state, config):
     now = datetime.now(JST)
     current_time_str = now.strftime("%H:%M")
-    
     closures = fetch_road_closures()
     
     for closure in closures:
@@ -167,48 +207,46 @@ def check_road_closures(state, config):
         calc_end = end_time if end_time else now
         duration_hours = (calc_end - start_time).total_seconds() / 3600
         
-        # 条件：6時間以上の通行止めが対象
-        if duration_hours < 6:
-            continue
+        if duration_hours < 6: continue
             
         target_config = next((c for c in config if c["branch"] in [branch_name, "全拠点"]), None)
-        if not target_config:
-            continue
+        if not target_config: continue
             
         webhook_url = target_config["webhook"]
-        scheduled_time = target_config["time"] # "7:30" or "7:45"
+        scheduled_time = target_config["time"]
         
         should_notify = False
         report_type = ""
-        
         notified_key_morning = f"{c_id}_morning"
         notified_key_instant = f"{c_id}_instant"
         
-        # 1. 朝の定例報告
         if current_time_str == scheduled_time and notified_key_morning not in state["notified_closures"]:
-            # 朝までに解除、または継続中のもの
             if status == "closed" or (status == "resolved" and end_time.time() <= datetime.strptime(scheduled_time, "%H:%M").time()):
                 should_notify = True
-                report_type = "🌅 【朝の定例報告】通行止め情報"
+                report_type = "🌅 【朝の定例報告】本社報告対象"
                 state["notified_closures"].append(notified_key_morning)
         
-        # 2. 即時報告（10分・5分間隔での検知）
         if notified_key_instant not in state["notified_closures"]:
             if status == "resolved":
-                # 解除時は即時報告（夜間〜昼間17:30まで、通知後〜9:00など）
                 should_notify = True
                 report_type = "✅ 【即時報告】通行止め解除"
                 state["notified_closures"].append(notified_key_instant)
             elif status == "closed" and 9 <= now.hour < 17 and duration_hours >= 6:
-                # 昼間（9:00〜17:30）に発生・継続して6時間を経過した瞬間
                 should_notify = True
                 report_type = "⚠️ 【即時報告】長期間通行止め（6時間経過）"
                 state["notified_closures"].append(notified_key_instant)
 
         if should_notify:
-            text = f"**担当拠点:** {branch_name}\n\n**開始:** {start_time.strftime('%Y/%m/%d %H:%M')}\n\n**状態:** {'解除済' if status == 'resolved' else '継続中'}"
+            text = (f"**対象拠点:** {branch_name}\n\n"
+                    f"**路線:** {closure['route']} ({closure['direction']})\n\n"
+                    f"**区間:** {closure['section']}\n\n"
+                    f"**原因:** {closure['reason']}\n\n"
+                    f"**対象SAPA:** {'、'.join(closure['facilities'])}\n\n"
+                    f"**開始:** {start_time.strftime('%Y/%m/%d %H:%M')}\n\n"
+                    f"**状態:** {'解除済' if status == 'resolved' else '継続中'}")
             if end_time:
                 text += f"\n\n**解除:** {end_time.strftime('%Y/%m/%d %H:%M')}"
+            
             send_teams_webhook(webhook_url, report_type, text)
 
 def main():
@@ -219,7 +257,7 @@ def main():
         check_road_closures(state, config)
         save_state(state)
     else:
-        print("設定が存在しないか、スプレッドシートURLが未設定です。")
+        print("設定が存在しないか、スプレッドシートが未設定です。")
 
 if __name__ == "__main__":
     main()
